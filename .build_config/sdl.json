@@ -1,0 +1,7 @@
+{
+    "x86_64-windows-gnu": {
+        "include": "thirdparty/sdl/x86_64-w64/include",
+        "libs": "thirdparty/sdl/x86_64-w64/lib",
+        "bin": "thirdparty/sdl/x86_64-w64/bin"
+    }
+}
