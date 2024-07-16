@@ -1,0 +1,6 @@
+[submodule "thirdparty/sdl_zig"]
+	path = thirdparty/sdl_zig
+	url = https://github.com/ikskuh/SDL.zig
+[submodule "thirdparty/vulkan-zig"]
+	path = thirdparty/vulkan-zig
+	url = https://github.com/Snektron/vulkan-zig/
