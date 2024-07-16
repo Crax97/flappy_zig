@@ -15,19 +15,21 @@ fn ArenaIterator(comptime T: type) type {
         current: usize,
 
         pub fn next(this: *@This()) ?*T {
-            if (this.current == this.arena.capacity) {
-                return null;
-            }
+            while (this.current < this.arena.capacity) {
+                const entry = this.arena.entry_ptr(T, this.current);
+                this.current += 1;
 
-            const entry = this.arena.entry_ptr(T, this.current);
-            this.current += 1;
-
-            if (entry.value) |val| {
-                return &val;
+                if (entry.value) |*value| {
+                    return value;
+                }
             }
+            return null;
         }
     };
 }
+
+const EMPTY_ARR: [0]u8 = ([0]u8{});
+const EMPTY: []u8 = EMPTY_ARR[0..0];
 
 pub const ErasedArena = struct {
     data: []u8,
@@ -57,9 +59,13 @@ pub const ErasedArena = struct {
             }
         };
 
-        return .{ .data = try allocator.alloc(u8, array_size(type_info, 1)), .type_info = type_info, .len = 0, .capacity = 1, .free_indices = std.ArrayList(ErasedIndex).init(allocator), .allocator = allocator, .vtable = ErasedArenaVTable{
+        return .{ .data = EMPTY, .type_info = type_info, .len = 0, .capacity = 0, .free_indices = std.ArrayList(ErasedIndex).init(allocator), .allocator = allocator, .vtable = ErasedArenaVTable{
             .clear_func = gen.clear,
         } };
+    }
+
+    pub fn reserve_index(self: *This) Allocator.Error!ErasedIndex {
+        return self.get_index();
     }
 
     pub fn deinit(self: *const This) void {
@@ -91,13 +97,14 @@ pub const ErasedArena = struct {
 
         const entry = self.entry_ptr(T, index.index);
         if (entry.generation == index.generation) {
-            return &entry.*.value;
+            return &entry.value.?;
         } else {
             return null;
         }
     }
 
-    fn entry_ptr(self: *const This, comptime T: type, index: usize) *Entry(T) {
+    pub fn entry_ptr(self: *const This, comptime T: type, index: usize) *Entry(T) {
+        std.debug.assert(index <= self.capacity);
         const ptr: [*]Entry(T) = @ptrCast(@alignCast(self.data.ptr));
         return &ptr[index];
     }
@@ -132,7 +139,7 @@ pub const ErasedArena = struct {
         if (self.free_indices.items.len > 0) {
             return self.free_indices.pop();
         } else {
-            const index = self.len;
+            const index = self.capacity;
             try self.grow(1);
             return ErasedIndex{ .index = index, .generation = 0 };
         }
@@ -140,14 +147,19 @@ pub const ErasedArena = struct {
 
     fn grow(self: *This, delta: usize) Allocator.Error!void {
         self.capacity += delta;
-        self.data = try self.allocator.realloc(self.data, self.capacity);
+        const new_count = ErasedArena.array_size(self.type_info, self.capacity);
+        if (self.data.ptr == EMPTY.ptr) {
+            self.data = try self.allocator.alloc(u8, new_count);
+        } else {
+            self.data = try self.allocator.realloc(self.data, new_count);
+        }
     }
 
     fn array_size(info: TypeInfo, count: usize) usize {
         return info.size * count;
     }
 };
-fn Index(comptime T: type) type {
+pub fn Index(comptime T: type) type {
     _ = T;
     return struct {
         inner_index: ErasedIndex,
@@ -160,6 +172,16 @@ pub fn GenArena(comptime T: type) type {
 
         pub fn init(allocator: Allocator) Allocator.Error!This {
             return .{ .inner = try ErasedArena.init(T, allocator) };
+        }
+
+        pub fn reserve_index(self: *This) Allocator.Error!Index(T) {
+            const erased_index = try self.inner.reserve_index();
+            return Index(T){ .inner_index = erased_index };
+        }
+
+        pub fn replace_at(self: *This, index: Index(T), value: T) void {
+            const entry = self.inner.entry_ptr(T, index.inner_index.index);
+            entry.* = Entry(T){ .generation = index.inner_index.generation, .value = value };
         }
 
         pub fn len(self: *const This) usize {
