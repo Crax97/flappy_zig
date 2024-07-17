@@ -1,3 +1,4 @@
+const std = @import("std");
 const world_mod = @import("world.zig");
 const World = world_mod.World;
 const EntityID = world_mod.EntityID;
@@ -5,7 +6,7 @@ const EntityID = world_mod.EntityID;
 const ErasedArena = @import("../gen_arena.zig").ErasedArena;
 const ErasedIndex = @import("../gen_arena.zig").ErasedIndex;
 
-const Allocator = @import("std").mem.Allocator;
+const Allocator = std.mem.Allocator;
 
 const type_id = @import("../util.zig").type_id;
 
@@ -13,6 +14,32 @@ pub const ErasedComponentHandle = struct {
     type_id: usize,
     index: ErasedIndex,
 };
+
+pub fn ComponentHandle(comptime T: type) type {
+    return struct {
+        handle: ErasedComponentHandle,
+        world: *World,
+
+        pub fn erase(this: @This()) ErasedComponentHandle {
+            return this.handle;
+        }
+
+        pub fn is_valid(this: @This()) bool {
+            const storage = this.world.get_storage(T);
+            if (storage.arena.get_ptr(T, this.handle.index)) |_| {
+                return true;
+            } else {
+                return false;
+            }
+        }
+        pub fn get(this: @This()) *T {
+            std.debug.assert(this.is_valid());
+
+            const storage = this.world.get_storage(T);
+            return storage.arena.get_ptr(T, this.handle.index).?;
+        }
+    };
+}
 
 pub const ComponentBegin = struct {
     world: *World,

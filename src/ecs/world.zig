@@ -8,6 +8,7 @@ const ComponentBegin = component_mod.ComponentBegin;
 const ComponentUpdate = component_mod.ComponentUpdate;
 const ComponentDestroyed = component_mod.ComponentDestroyed;
 const ErasedComponentHandle = component_mod.ErasedComponentHandle;
+const ComponentHandle = component_mod.ComponentHandle;
 const ComponentStorage = component_mod.ComponentStorage;
 const ComponentArenaVTable = component_mod.ComponentArenaVTable;
 
@@ -90,16 +91,6 @@ pub const World = struct {
     entities: Entities,
     new_entities: NewEntities,
 
-    pub fn ComponentHandle(comptime T: type) type {
-        return struct {
-            index: gen_arena.ErasedIndex,
-
-            pub fn erase(this: @This()) ErasedComponentHandle {
-                return .{ .type_id = type_id(T), .index = this.index };
-            }
-        };
-    }
-
     pub fn init(allocator: Allocator) Allocator.Error!World {
         return .{
             .storage = ComponentMap.init(allocator),
@@ -115,6 +106,17 @@ pub const World = struct {
         }
 
         this.storage.deinit();
+
+        for (this.new_entities.items) |*ent| {
+            ent.components.deinit();
+        }
+        this.new_entities.deinit();
+
+        var iterator = this.entities.iterator();
+        while (iterator.next()) |ent| {
+            ent.components.deinit();
+        }
+        this.entities.deinit();
     }
 
     pub fn new_entity(this: *World) SpawnEntity {
@@ -146,8 +148,27 @@ pub const World = struct {
         }
     }
 
+    pub fn get_component(this: *World, comptime T: type, entity: EntityID) ?ComponentHandle(T) {
+        const info = this.entities.get_ptr(entity.id);
+        if (info) |entity_info| {
+            // TODO: Convert this to use something else (e.g sparse set, hash map)
+            for (entity_info.components.items) |component_handle| {
+                if (component_handle.type_id == type_id(T)) {
+                    return ComponentHandle(T){ .handle = component_handle, .world = this };
+                }
+            }
+        }
+        return null;
+    }
+
+    pub fn get_storage(this: *World, comptime T: type) *ComponentStorage {
+        return this.storage.getPtr(type_id(T)).?;
+    }
+
     fn spawn_new_entities(this: *World) anyerror!void {
-        while (this.new_entities.popOrNull()) |entity| {
+        for (this.new_entities.items) |*entity| {
+            defer entity.components.deinit();
+
             var entity_info = EntityInfo{ .components = std.ArrayList(ErasedComponentHandle).init(this.allocator) };
 
             var new_component_itr = entity.components.iterator();
@@ -170,5 +191,7 @@ pub const World = struct {
                 try storage.erased_arena_vtable.call_begin_at(&storage.arena, component.index, this, entity.id);
             }
         }
+
+        this.new_entities.clearRetainingCapacity();
     }
 };

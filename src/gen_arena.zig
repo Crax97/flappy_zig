@@ -28,11 +28,8 @@ fn ArenaIterator(comptime T: type) type {
     };
 }
 
-const EMPTY_ARR: [0]u8 = ([0]u8{});
-const EMPTY: []u8 = EMPTY_ARR[0..0];
-
 pub const ErasedArena = struct {
-    data: []u8,
+    data: ErasedArenaMemory,
     type_info: TypeInfo,
     len: usize,
     capacity: usize,
@@ -46,11 +43,9 @@ pub const ErasedArena = struct {
 
         const gen = struct {
             fn clear(self: *ErasedArena) Allocator.Error!void {
-                const entries_ptr: [*]Entry(T) = @ptrCast(@alignCast(self.data));
-
                 for (0..self.capacity) |i| {
-                    const entry = &entries_ptr[i];
-                    if (entry.*.value) |_| {
+                    const entry = self.entry_ptr(T, i);
+                    if (entry.value) |_| {
                         entry.*.value = null;
                         entry.*.generation += 1;
                         try self.free_indices.append(ErasedIndex{ .index = i, .generation = entry.generation });
@@ -59,7 +54,7 @@ pub const ErasedArena = struct {
             }
         };
 
-        return .{ .data = EMPTY, .type_info = type_info, .len = 0, .capacity = 0, .free_indices = std.ArrayList(ErasedIndex).init(allocator), .allocator = allocator, .vtable = ErasedArenaVTable{
+        return .{ .data = ErasedArenaMemory.init(Entry(T)), .type_info = type_info, .len = 0, .capacity = 0, .free_indices = std.ArrayList(ErasedIndex).init(allocator), .allocator = allocator, .vtable = ErasedArenaVTable{
             .clear_func = gen.clear,
         } };
     }
@@ -70,7 +65,7 @@ pub const ErasedArena = struct {
 
     pub fn deinit(self: *const This) void {
         self.free_indices.deinit();
-        self.allocator.free(self.data);
+        self.allocator.free(self.data.base);
     }
 
     pub fn push(self: *This, comptime T: type, value: T) Allocator.Error!ErasedIndex {
@@ -105,7 +100,7 @@ pub const ErasedArena = struct {
 
     pub fn entry_ptr(self: *const This, comptime T: type, index: usize) *Entry(T) {
         std.debug.assert(index <= self.capacity);
-        const ptr: [*]Entry(T) = @ptrCast(@alignCast(self.data.ptr));
+        const ptr: [*]Entry(T) = self.data.to_ptr(Entry(T));
         return &ptr[index];
     }
 
@@ -147,18 +142,35 @@ pub const ErasedArena = struct {
 
     fn grow(self: *This, delta: usize) Allocator.Error!void {
         self.capacity += delta;
-        const new_count = ErasedArena.array_size(self.type_info, self.capacity);
-        if (self.data.ptr == EMPTY.ptr) {
-            self.data = try self.allocator.alloc(u8, new_count);
-        } else {
-            self.data = try self.allocator.realloc(self.data, new_count);
-        }
-    }
-
-    fn array_size(info: TypeInfo, count: usize) usize {
-        return info.size * count;
+        // const new_count = ErasedArena.array_size(self.type_info, self.capacity);
+        try self.data.allocate(self.allocator, self.capacity);
     }
 };
+
+const ErasedArenaMemory = struct {
+    const EMPTY: []u8 = ([_]u8{})[0..0];
+    // Only free base
+    base: []u8,
+    alignment: usize,
+    size: usize,
+
+    fn init(comptime T: type) ErasedArenaMemory {
+        return .{
+            .base = EMPTY,
+            .alignment = @alignOf(T),
+            .size = @sizeOf(T),
+        };
+    }
+
+    fn allocate(this: *ErasedArenaMemory, allocator: Allocator, count: usize) Allocator.Error!void {
+        this.base = try allocator.realloc(this.base, count * this.size);
+    }
+
+    fn to_ptr(this: *const ErasedArenaMemory, comptime T: type) [*]T {
+        return @ptrCast(@alignCast(this.base.ptr));
+    }
+};
+
 pub fn Index(comptime T: type) type {
     _ = T;
     return struct {
@@ -212,6 +224,10 @@ pub fn GenArena(comptime T: type) type {
 
         pub fn deinit(self: *This) void {
             self.inner.deinit();
+        }
+
+        pub fn iterator(self: *This) ArenaIterator(T) {
+            return self.inner.iterator(T);
         }
     };
 }
@@ -267,7 +283,7 @@ test "erased gen arena basics" {
 }
 
 test "gen arena basics" {
-    var gen_arena_u32 = try GenArena.init(std.testing.allocator);
+    var gen_arena_u32 = try GenArena(u32).init(std.testing.allocator);
     defer gen_arena_u32.deinit();
 
     const index_1 = try gen_arena_u32.push(1);
