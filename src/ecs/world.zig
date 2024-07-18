@@ -35,16 +35,32 @@ const NewComponent = struct {
     free_fn: *const fn (allocator: Allocator, data: *anyopaque) void,
     add_into_storage_fn: *const fn (storage: *ComponentStorage, value: *anyopaque) Allocator.Error!ErasedComponentHandle,
 };
-const NewEntity = struct { id: EntityID, components: std.AutoArrayHashMap(usize, NewComponent) };
+const NewComponents = std.AutoArrayHashMap(usize, NewComponent);
+const NewEntity = struct { id: EntityID, components: NewComponents };
 const NewEntities = std.ArrayList(NewEntity);
 
 pub const SpawnEntity = struct {
     world: *World,
-    components: std.AutoArrayHashMap(usize, NewComponent),
+    new_entity: *NewEntity,
+    pub fn new(world: *World) Allocator.Error!SpawnEntity {
+        const new_entity = try world.new_entities.addOne();
+        new_entity.* = .{
+            .id = EntityID{ .id = try world.entities.reserve_index() },
+            .components = NewComponents.init(world.allocator),
+        };
+        return .{
+            .world = world,
+            .new_entity = new_entity,
+        };
+    }
     pub fn add_component(this: *SpawnEntity, component: anytype) Allocator.Error!void {
         const T = @TypeOf(component);
         const component_ty_id = type_id(T);
-        const component_entry = try this.components.getOrPut(component_ty_id);
+        const component_entry = try this.new_entity.components.getOrPut(component_ty_id);
+
+        if (component_entry.found_existing) {
+            std.debug.panic("Component {s} already defined for entity!\n", .{@typeName(T)});
+        }
 
         const gen = struct {
             fn create_storage_fn(world: *World) Allocator.Error!ComponentStorage {
@@ -60,7 +76,7 @@ pub const SpawnEntity = struct {
             }
             fn add_into_storage_fn(storage: *ComponentStorage, value: *anyopaque) Allocator.Error!ErasedComponentHandle {
                 const value_typed: *T = @ptrCast(@alignCast(value));
-                return storage.add_component(value_typed.*);
+                return try storage.add_component(value_typed.*);
             }
         };
 
@@ -75,13 +91,8 @@ pub const SpawnEntity = struct {
         val.* = component;
         component_entry.value_ptr.* = new_component;
     }
-
-    pub fn spawn(this: *SpawnEntity) Allocator.Error!EntityID {
-        const index = try this.world.entities.reserve_index();
-        const id = EntityID{ .id = index };
-
-        try this.world.new_entities.append(NewEntity{ .id = id, .components = this.components });
-        return id;
+    pub fn id(this: *@This()) EntityID {
+        return this.new_entity.id;
     }
 };
 
@@ -101,6 +112,12 @@ pub const World = struct {
     }
 
     pub fn deinit(this: *World) void {
+        var iterator = this.entities.iterator();
+        while (iterator.next()) |ent| {
+            ent.components.deinit();
+        }
+        this.entities.deinit();
+
         for (this.storage.values()) |val| {
             val.arena.deinit();
         }
@@ -108,22 +125,18 @@ pub const World = struct {
         this.storage.deinit();
 
         for (this.new_entities.items) |*ent| {
+            var itr = ent.components.iterator();
+            while (itr.next()) |comp| {
+                comp.value_ptr.free_fn(this.allocator, comp.value_ptr.data);
+            }
+
             ent.components.deinit();
         }
         this.new_entities.deinit();
-
-        var iterator = this.entities.iterator();
-        while (iterator.next()) |ent| {
-            ent.components.deinit();
-        }
-        this.entities.deinit();
     }
 
-    pub fn new_entity(this: *World) SpawnEntity {
-        return SpawnEntity{
-            .world = this,
-            .components = std.AutoArrayHashMap(usize, NewComponent).init(this.allocator),
-        };
+    pub fn new_entity(this: *World) Allocator.Error!SpawnEntity {
+        return SpawnEntity.new(this);
     }
 
     pub fn begin(this: *World) anyerror!void {
@@ -173,14 +186,18 @@ pub const World = struct {
 
             var new_component_itr = entity.components.iterator();
             while (new_component_itr.next()) |new_component| {
+                const component_info = new_component.value_ptr;
+                const component_ptr = component_info.data;
+                defer component_info.free_fn(this.allocator, component_ptr);
+
                 const map = try this.storage.getOrPut(new_component.key_ptr.*);
-                defer new_component.value_ptr.free_fn(this.allocator, new_component.value_ptr.data);
                 if (!map.found_existing) {
                     const storage = try new_component.value_ptr.create_storage_fn(this);
                     map.value_ptr.* = storage;
                 }
+                const storage = map.value_ptr;
 
-                const handle = try new_component.value_ptr.add_into_storage_fn(map.value_ptr, new_component.value_ptr.data);
+                const handle = try component_info.add_into_storage_fn(storage, component_ptr);
                 try entity_info.components.append(handle);
             }
 

@@ -60,7 +60,9 @@ pub const ErasedArena = struct {
     }
 
     pub fn reserve_index(self: *This) Allocator.Error!ErasedIndex {
-        return self.get_index();
+        const index = try self.get_index();
+        self.len += 1;
+        return index;
     }
 
     pub fn deinit(self: *const This) void {
@@ -75,6 +77,22 @@ pub const ErasedArena = struct {
         entry.* = Entry(T){ .generation = index.generation, .value = value };
         self.len += 1;
         return index;
+    }
+
+    pub fn remove(self: *This, comptime T: type, index: ErasedIndex) Allocator.Error!?T {
+        std.debug.assert(type_id(T) == self.type_info.type_id);
+        const entry = self.entry_ptr(T, index.index);
+        if (entry.generation == index.generation) {
+            const value = entry.value;
+            entry.*.value = null;
+            entry.*.generation += 1;
+            try self.free_indices.append(ErasedIndex{ .index = index.index, .generation = index.generation + 1 });
+            self.len -= 1;
+
+            return value;
+        } else {
+            return null;
+        }
     }
 
     pub fn get(self: *This, comptime T: type, index: ErasedIndex) ?T {
@@ -102,22 +120,6 @@ pub const ErasedArena = struct {
         std.debug.assert(index <= self.capacity);
         const ptr: [*]Entry(T) = self.data.to_ptr(Entry(T));
         return &ptr[index];
-    }
-
-    pub fn remove(self: *This, comptime T: type, index: ErasedIndex) Allocator.Error!?T {
-        std.debug.assert(type_id(T) == self.type_info.type_id);
-        const entry = self.entry_ptr(T, index.index);
-        if (entry.generation == index.generation) {
-            const value = entry.value;
-            entry.*.value = null;
-            entry.*.generation += 1;
-            try self.free_indices.append(ErasedIndex{ .index = index.index, .generation = index.generation + 1 });
-            self.len -= 1;
-
-            return value;
-        } else {
-            return null;
-        }
     }
 
     pub fn iterator(self: *This, comptime T: type) ArenaIterator(T) {
@@ -188,6 +190,10 @@ pub fn GenArena(comptime T: type) type {
 
         pub fn reserve_index(self: *This) Allocator.Error!Index(T) {
             const erased_index = try self.inner.reserve_index();
+            const entry = self.inner.entry_ptr(T, erased_index.index);
+            entry.generation = erased_index.generation;
+            entry.value = null;
+
             return Index(T){ .inner_index = erased_index };
         }
 
@@ -305,4 +311,82 @@ test "gen arena basics" {
     try std.testing.expectEqual(gen_arena_u32.get(index_1), null);
     try std.testing.expectEqual(gen_arena_u32.get(index_2), null);
     try std.testing.expectEqual(gen_arena_u32.get(index_3), null);
+}
+
+test "gen arena replace at" {
+    var gen_arena_u32 = try GenArena(u32).init(std.testing.allocator);
+    defer gen_arena_u32.deinit();
+
+    const index_1 = try gen_arena_u32.reserve_index();
+    const index_2 = try gen_arena_u32.reserve_index();
+    const index_3 = try gen_arena_u32.reserve_index();
+
+    try std.testing.expectEqual(gen_arena_u32.len(), 3);
+    gen_arena_u32.replace_at(index_1, 1);
+    gen_arena_u32.replace_at(index_2, 2);
+    gen_arena_u32.replace_at(index_3, 3);
+
+    try std.testing.expectEqual(gen_arena_u32.get(index_1), 1);
+    try std.testing.expectEqual(gen_arena_u32.get(index_2), 2);
+    try std.testing.expectEqual(gen_arena_u32.get(index_3), 3);
+
+    try std.testing.expectEqual(gen_arena_u32.remove(index_1), 1);
+    try std.testing.expectEqual(gen_arena_u32.get(index_1), null);
+    try std.testing.expectEqual(gen_arena_u32.get(index_2), 2);
+    try std.testing.expectEqual(gen_arena_u32.get(index_3), 3);
+
+    try gen_arena_u32.clear();
+
+    try std.testing.expectEqual(gen_arena_u32.get(index_1), null);
+    try std.testing.expectEqual(gen_arena_u32.get(index_2), null);
+    try std.testing.expectEqual(gen_arena_u32.get(index_3), null);
+}
+
+test "gen arena allocating" {
+    const AllocThing = struct {
+        bytes: std.ArrayList(u8),
+
+        fn new(text: []const u8) @This() {
+            var list = std.ArrayList(u8).init(std.testing.allocator);
+            list.appendSlice(text) catch {
+                unreachable;
+            };
+            return .{ .bytes = list };
+        }
+
+        fn deinit(this: *@This()) void {
+            this.bytes.deinit();
+        }
+    };
+
+    var gen_arena = try GenArena(AllocThing).init(std.testing.allocator);
+    defer gen_arena.deinit();
+
+    const index_1 = try gen_arena.push(AllocThing.new("Hello"));
+    const index_2 = try gen_arena.push(AllocThing.new("World"));
+    const index_3 = try gen_arena.push(AllocThing.new("Foo"));
+
+    try std.testing.expectEqual(gen_arena.len(), 3);
+    try std.testing.expect(std.mem.eql(u8, gen_arena.get(index_1).?.bytes.items, "Hello"));
+    try std.testing.expect(std.mem.eql(u8, gen_arena.get(index_2).?.bytes.items, "World"));
+    try std.testing.expect(std.mem.eql(u8, gen_arena.get(index_3).?.bytes.items, "Foo"));
+
+    var thing = (try gen_arena.remove(index_1)).?;
+    try std.testing.expect(std.mem.eql(u8, thing.bytes.items, "Hello"));
+    thing.deinit();
+
+    try std.testing.expectEqual(gen_arena.get(index_1), null);
+    try std.testing.expect(std.mem.eql(u8, gen_arena.get(index_2).?.bytes.items, "World"));
+    try std.testing.expect(std.mem.eql(u8, gen_arena.get(index_3).?.bytes.items, "Foo"));
+
+    var it = gen_arena.iterator();
+    while (it.next()) |next| {
+        next.deinit();
+    }
+
+    try gen_arena.clear();
+
+    try std.testing.expectEqual(gen_arena.get(index_1), null);
+    try std.testing.expectEqual(gen_arena.get(index_2), null);
+    try std.testing.expectEqual(gen_arena.get(index_3), null);
 }

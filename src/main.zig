@@ -46,28 +46,23 @@ const BulletSpawnerComponent = struct {
         this.spawn_timer = 7.0;
         this.current_time = 0.0;
         this.id_counter = 0;
-        std.debug.print("BulletSpawner init with lifetime {d}\n", .{this.spawn_timer});
     }
 
     pub fn update(this: *BulletSpawnerComponent, ctx: ComponentUpdate) anyerror!void {
         this.current_time += ctx.delta_time;
         if (this.current_time >= this.spawn_timer) {
-            var new_entity = ctx
+            var new_entity = try ctx
                 .world
                 .new_entity();
             new_entity.add_component(BulletComponent{ .direction = vec3.zero(), .id = this.id_counter }) catch {
                 std.debug.panic("alloc", .{});
             };
-            const id = new_entity.spawn() catch {
-                std.debug.panic("spawn", .{});
-            };
+            const id = new_entity.id();
 
             this.id_counter += 1;
             this.current_time = this.current_time - this.spawn_timer;
             std.debug.print("BulletSpawner spawn bullet id {d}\n", .{id.id.inner_index.index});
         }
-        std.debug.print("BulletSpawner ptr {*}\n", .{this});
-        std.debug.print("BulletSpawner spawn timer {d}\n", .{this.current_time});
     }
 };
 
@@ -78,9 +73,8 @@ pub fn main() !void {
     var game_world = try World.init(allocator);
     defer game_world.deinit();
 
-    var entt = game_world.new_entity();
+    var entt = try game_world.new_entity();
     try entt.add_component(BulletSpawnerComponent{ .spawn_timer = 7.0 });
-    _ = try entt.spawn();
 
     try game_world.begin();
 
