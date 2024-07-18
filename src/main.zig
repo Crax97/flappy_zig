@@ -17,7 +17,10 @@ pub fn main() !void {
     }
     defer SDL.SDL_Quit();
 
-    var engine_instance = engine.Engine.init(.{});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    var engine_instance = try engine.Engine.init(.{}, allocator);
     defer engine_instance.deinit();
 
     engine_instance.run_loop();

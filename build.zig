@@ -26,7 +26,6 @@ pub fn build(b: *std.Build) !void {
 
     sdk.link(exe, .dynamic, .SDL2);
 
-    // const registry = b.dependency("vulkan_headers", .{}).path("thirdparty/vulkan/vk.xml");
     const registry = "thirdparty/vulkan/vk.xml";
     const vk_gen = b.dependency("vulkan_zig", .{}).artifact("vulkan-zig-generator");
     const vk_gen_cmd = b.addRunArtifact(vk_gen);
