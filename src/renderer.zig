@@ -38,18 +38,160 @@ const VkDevice = struct {
     handle: Device,
     queue: VkQueue,
 };
+const SwapchainImage = struct {
+    image: vk.Image,
+    view: vk.ImageView,
+};
+
+pub const TextureFormat = enum {
+    rgba_8,
+};
+
+pub const TextureFlags = packed struct {};
+
+pub const Texture = struct {
+    pub const CreateInfo = struct {
+        width: usize,
+        height: usize,
+        format: TextureFormat,
+        initial_bytes: ?[]const u8,
+        flags: TextureFlags = .{},
+    };
+    image: vk.Image,
+    view: vk.ImageView,
+};
+
+const Swapchain = struct {
+    handle: ?vk.SwapchainKHR = null,
+    images: []SwapchainImage = &[0]SwapchainImage{},
+    format: vk.SurfaceFormatKHR = undefined,
+    present_mode: vk.PresentModeKHR = undefined,
+    extents: vk.Extent2D = undefined,
+    current_image: u32 = undefined,
+
+    fn init(this: *Swapchain, instance: Instance, physical_device: vk.PhysicalDevice, device: Device, surface: vk.SurfaceKHR, allocator: Allocator) !void {
+        // this.uninit(device, allocator);
+        if (this.images.len > 0) {
+            allocator.free(this.images);
+        }
+
+        const surface_info = try instance.getPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface);
+        const surface_formats = try instance.getPhysicalDeviceSurfaceFormatsAllocKHR(physical_device, surface, allocator);
+        defer allocator.free(surface_formats);
+
+        const img_format = surface_formats[0];
+        const present_mode = vk.PresentModeKHR.fifo_khr;
+        const flags = vk.ImageUsageFlags{
+            .sampled_bit = true,
+            .storage_bit = true,
+            .transfer_src_bit = true,
+            .transfer_dst_bit = true,
+            .color_attachment_bit = true,
+        };
+
+        var image_count: u32 = 3;
+
+        const swapchain_create_info = vk.SwapchainCreateInfoKHR{
+            .s_type = vk.StructureType.swapchain_create_info_khr,
+            .surface = surface,
+            .min_image_count = image_count,
+            .image_format = img_format.format,
+            .image_color_space = img_format.color_space,
+            .image_sharing_mode = vk.SharingMode.concurrent,
+            .image_usage = flags,
+            .clipped = vk.TRUE,
+            .pre_transform = surface_info.current_transform,
+            .image_extent = surface_info.current_extent,
+            .image_array_layers = 1,
+            .composite_alpha = vk.CompositeAlphaFlagsKHR{ .opaque_bit_khr = true },
+            .present_mode = present_mode,
+        };
+
+        const swapchain_instance = try device.createSwapchainKHR(&swapchain_create_info, null);
+        errdefer device.destroySwapchainKHR(swapchain_instance, null);
+        this.* = Swapchain{ .handle = swapchain_instance, .current_image = 0, .extents = swapchain_create_info.image_extent, .format = img_format, .images = try allocator.alloc(SwapchainImage, 3), .present_mode = present_mode };
+
+        const images = try allocator.alloc(vk.Image, image_count);
+        const views = try allocator.alloc(vk.ImageView, image_count);
+        defer allocator.free(images);
+        defer allocator.free(views);
+
+        if (try device.getSwapchainImagesKHR(swapchain_instance, &image_count, images.ptr) != vk.Result.success) {
+            vulkan_init_failure("Failed to get swapchain images!");
+        }
+
+        for (images, 0..) |image, i| {
+            const view = try device.createImageView(&vk.ImageViewCreateInfo{ .s_type = vk.StructureType.image_view_create_info, .image = image, .format = img_format.format, .subresource_range = vk.ImageSubresourceRange{ .aspect_mask = vk.ImageAspectFlags{ .color_bit = true }, .base_array_layer = 0, .base_mip_level = 0, .layer_count = 1, .level_count = 1 }, .view_type = vk.ImageViewType.@"2d", .components = vk.ComponentMapping{
+                .a = vk.ComponentSwizzle.a,
+                .r = vk.ComponentSwizzle.r,
+                .g = vk.ComponentSwizzle.g,
+                .b = vk.ComponentSwizzle.b,
+            } }, null);
+            this.images[i] = .{ .image = image, .view = view };
+        }
+    }
+
+    fn deinit(this: *Swapchain, device: Device, allocator: Allocator) void {
+        defer allocator.free(this.images);
+        if (this.handle == null) {
+            return;
+        }
+        for (this.images) |image| {
+            device.destroyImageView(image.view, null);
+        }
+        device.destroySwapchainKHR(this.handle.?, null);
+    }
+};
+
+const TextureDrawInfo = struct {
+    texture: Texture,
+};
+
+const RenderTextures = std.ArrayList(TextureDrawInfo);
+const RenderList = struct {
+    textures: RenderTextures,
+
+    fn init(allocator: Allocator) RenderList {
+        return .{
+            .textures = RenderTextures.init(allocator),
+        };
+    }
+
+    fn clear(this: *RenderList) void {
+        this.textures.clearRetainingCapacity();
+    }
+};
 
 pub const Renderer = struct {
     instance: Instance,
     surface: vk.SurfaceKHR,
     physical_device: VkPhysicalDevice,
     device: VkDevice,
+    swapchain: Swapchain,
+
+    debug_utils_messenger: vk.DebugUtilsMessengerEXT,
+
+    allocator: Allocator,
+
+    render_list: RenderList,
 
     pub fn init(window: *Window, allocator: Allocator) !Renderer {
         const vk_loader = sdl.SDL_Vulkan_GetVkGetInstanceProcAddr().?;
         const vkb = try BaseDispatch.load(vk_loader);
         const instance = try create_vulkan_instance(&vkb, window.window, allocator);
         errdefer instance.destroyInstance(null);
+
+        const debug_utils = vk.DebugUtilsMessengerCreateInfoEXT{ .s_type = vk.StructureType.debug_utils_messenger_create_info_ext, .message_severity = vk.DebugUtilsMessageSeverityFlagsEXT{
+            .error_bit_ext = true,
+            .info_bit_ext = true,
+            .verbose_bit_ext = true,
+            .warning_bit_ext = true,
+        }, .message_type = vk.DebugUtilsMessageTypeFlagsEXT{
+            .general_bit_ext = true,
+            .performance_bit_ext = true,
+            .validation_bit_ext = true,
+        }, .pfn_user_callback = message_callback };
+        const debug_utils_messenger = try instance.createDebugUtilsMessengerEXT(&debug_utils, null);
 
         const surface = try create_vulkan_surface(window.window, instance);
         errdefer instance.destroySurfaceKHR(surface, null);
@@ -58,15 +200,38 @@ pub const Renderer = struct {
         const device = try init_logical_device(instance, physical_device, surface, allocator);
         errdefer device.handle.destroyDevice(null);
 
+        var swapchain = Swapchain{};
+        try swapchain.init(instance, physical_device.device, device.handle, surface, allocator);
+
         std.log.info("Picked device {s}\n", .{physical_device.properties.device_name});
 
-        return .{ .instance = instance, .surface = surface, .physical_device = physical_device, .device = device };
+        return .{
+            .instance = instance,
+            .debug_utils_messenger = debug_utils_messenger,
+            .surface = surface,
+            .physical_device = physical_device,
+            .device = device,
+            .swapchain = swapchain,
+            .allocator = allocator,
+
+            .render_list = RenderList.init(allocator),
+        };
     }
 
     pub fn deinit(this: *Renderer) void {
+        this.swapchain.deinit(this.device.handle, this.allocator);
         this.instance.destroySurfaceKHR(this.surface, null);
         this.device.handle.destroyDevice(null);
+        this.instance.destroyDebugUtilsMessengerEXT(this.debug_utils_messenger, null);
         this.instance.destroyInstance(null);
+    }
+
+    pub fn start_rendering(this: *Renderer) void {
+        this.render_list.clear();
+    }
+
+    pub fn render(this: *Renderer) void {
+        _ = this;
     }
 
     fn create_vulkan_instance(vkb: *const BaseDispatch, window: *sdl.SDL_Window, allocator: Allocator) !Instance {
@@ -87,7 +252,7 @@ pub const Renderer = struct {
         var exts = std.ArrayList([*:0]const u8).init(allocator);
         defer exts.deinit();
         _ = try exts.addManyAsSlice(ext_counts);
-        try exts.append("VK_EXT_debug_utils");
+        try exts.append(vk.extensions.ext_debug_utils.name);
 
         if (sdl.SDL_Vulkan_GetInstanceExtensions(window, &ext_counts, exts.items.ptr) != sdl.SDL_TRUE) {
             sdl_util.sdl_panic();
@@ -117,19 +282,20 @@ pub const Renderer = struct {
             const SortContext = struct {
                 instance: Instance,
             };
+            fn device_ty_priority(device_type: vk.PhysicalDeviceType) usize {
+                return switch (device_type) {
+                    vk.PhysicalDeviceType.discrete_gpu => 3,
+                    vk.PhysicalDeviceType.integrated_gpu => 2,
+                    vk.PhysicalDeviceType.virtual_gpu => 1,
+                    else => 0,
+                };
+            }
             fn sort_physical_devices(context: SortContext, a: vk.PhysicalDevice, b: vk.PhysicalDevice) bool {
                 const props_a = context.instance.getPhysicalDeviceProperties(a);
                 const props_b = context.instance.getPhysicalDeviceProperties(b);
-                const device_ty_a: usize = switch (props_a.device_type) {
-                    vk.PhysicalDeviceType.discrete_gpu => 3,
-                    vk.PhysicalDeviceType.integrated_gpu, vk.PhysicalDeviceType.virtual_gpu => 2,
-                    else => 1,
-                };
-                const device_ty_b: usize = switch (props_b.device_type) {
-                    vk.PhysicalDeviceType.discrete_gpu => 3,
-                    vk.PhysicalDeviceType.integrated_gpu, vk.PhysicalDeviceType.virtual_gpu => 2,
-                    else => 1,
-                };
+
+                const device_ty_a = device_ty_priority(props_a.device_type);
+                const device_ty_b = device_ty_priority(props_b.device_type);
 
                 return device_ty_a > device_ty_b;
             }
@@ -213,6 +379,34 @@ pub const Renderer = struct {
         };
     }
 };
+
+fn message_callback(
+    message_severity: vk.DebugUtilsMessageSeverityFlagsEXT,
+    message_types: vk.DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT,
+    p_user_data: ?*anyopaque,
+) callconv(vk.vulkan_call_conv) vk.Bool32 {
+    if (p_callback_data == null) {
+        return vk.FALSE;
+    }
+    if (p_callback_data.?.p_message == null) {
+        return vk.FALSE;
+    }
+    _ = p_user_data;
+    const format = "vulkan message: {s}";
+    if (message_severity.info_bit_ext) {
+        std.log.info(format, .{p_callback_data.?.p_message.?});
+    } else if (message_severity.warning_bit_ext) {
+        std.log.warn(format, .{p_callback_data.?.p_message.?});
+    } else if (message_severity.error_bit_ext) {
+        std.log.err(format, .{p_callback_data.?.p_message.?});
+
+        if (message_types.validation_bit_ext) {
+            std.debug.panic("Vulkan failure", .{});
+        }
+    }
+    return vk.FALSE;
+}
 
 fn vulkan_init_failure(message: []const u8) noreturn {
     sdl_util.message_box("Vulkan initialization failed", message, .Error);
