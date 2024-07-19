@@ -70,11 +70,12 @@ pub const Engine = struct {
                     else => {},
                 }
             }
-            this.renderer.start_rendering();
+
+            try this.renderer.start_rendering();
 
             try game.update(game.target, this);
 
-            this.renderer.render();
+            try this.renderer.render();
         }
 
         try game.end(game.target, this);

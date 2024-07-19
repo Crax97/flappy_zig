@@ -69,11 +69,15 @@ const Swapchain = struct {
     extents: vk.Extent2D = undefined,
     current_image: u32 = undefined,
 
-    fn init(this: *Swapchain, instance: Instance, physical_device: vk.PhysicalDevice, device: Device, surface: vk.SurfaceKHR, allocator: Allocator) !void {
-        // this.uninit(device, allocator);
+    acquire_fence: vk.Fence = vk.Fence.null_handle,
+
+    fn init(this: *Swapchain, instance: Instance, physical_device: vk.PhysicalDevice, device: Device, surface: vk.SurfaceKHR, queue: vk.Queue, qfi: u32, allocator: Allocator) !void {
+        this.deinit(device, allocator);
         if (this.images.len > 0) {
             allocator.free(this.images);
         }
+
+        const acquire_fence = try make_fence(device, false);
 
         const surface_info = try instance.getPhysicalDeviceSurfaceCapabilitiesKHR(physical_device, surface);
         const surface_formats = try instance.getPhysicalDeviceSurfaceFormatsAllocKHR(physical_device, surface, allocator);
@@ -97,7 +101,9 @@ const Swapchain = struct {
             .min_image_count = image_count,
             .image_format = img_format.format,
             .image_color_space = img_format.color_space,
-            .image_sharing_mode = vk.SharingMode.concurrent,
+            .image_sharing_mode = vk.SharingMode.exclusive,
+            .queue_family_index_count = 1,
+            .p_queue_family_indices = &[1]u32{qfi},
             .image_usage = flags,
             .clipped = vk.TRUE,
             .pre_transform = surface_info.current_transform,
@@ -109,7 +115,7 @@ const Swapchain = struct {
 
         const swapchain_instance = try device.createSwapchainKHR(&swapchain_create_info, null);
         errdefer device.destroySwapchainKHR(swapchain_instance, null);
-        this.* = Swapchain{ .handle = swapchain_instance, .current_image = 0, .extents = swapchain_create_info.image_extent, .format = img_format, .images = try allocator.alloc(SwapchainImage, 3), .present_mode = present_mode };
+        this.* = Swapchain{ .handle = swapchain_instance, .current_image = 0, .extents = swapchain_create_info.image_extent, .format = img_format, .images = try allocator.alloc(SwapchainImage, 3), .present_mode = present_mode, .acquire_fence = acquire_fence };
 
         const images = try allocator.alloc(vk.Image, image_count);
         const views = try allocator.alloc(vk.ImageView, image_count);
@@ -120,26 +126,114 @@ const Swapchain = struct {
             vulkan_init_failure("Failed to get swapchain images!");
         }
 
+        const cmd_pool = try device.createCommandPool(&vk.CommandPoolCreateInfo{ .s_type = vk.StructureType.command_pool_create_info, .flags = vk.CommandPoolCreateFlags{ .reset_command_buffer_bit = true }, .queue_family_index = qfi }, null);
+        defer device.destroyCommandPool(cmd_pool, null);
+
+        var cmd_buffers = [1]vk.CommandBuffer{vk.CommandBuffer.null_handle};
+        try device.allocateCommandBuffers(&vk.CommandBufferAllocateInfo{
+            .s_type = vk.StructureType.command_buffer_allocate_info,
+            .command_pool = cmd_pool,
+            .level = vk.CommandBufferLevel.primary,
+            .command_buffer_count = 1,
+        }, &cmd_buffers);
+
+        try device.beginCommandBuffer(cmd_buffers[0], &vk.CommandBufferBeginInfo{
+            .s_type = vk.StructureType.command_buffer_begin_info,
+            .flags = vk.CommandBufferUsageFlags{ .one_time_submit_bit = true },
+        });
+
+        const image_mem_barriers = try allocator.alloc(vk.ImageMemoryBarrier2, images.len);
+        defer allocator.free(image_mem_barriers);
+
         for (images, 0..) |image, i| {
-            const view = try device.createImageView(&vk.ImageViewCreateInfo{ .s_type = vk.StructureType.image_view_create_info, .image = image, .format = img_format.format, .subresource_range = vk.ImageSubresourceRange{ .aspect_mask = vk.ImageAspectFlags{ .color_bit = true }, .base_array_layer = 0, .base_mip_level = 0, .layer_count = 1, .level_count = 1 }, .view_type = vk.ImageViewType.@"2d", .components = vk.ComponentMapping{
+            const subresource_range = vk.ImageSubresourceRange{ .aspect_mask = vk.ImageAspectFlags{ .color_bit = true }, .base_array_layer = 0, .base_mip_level = 0, .layer_count = 1, .level_count = 1 };
+            const view = try device.createImageView(&vk.ImageViewCreateInfo{ .s_type = vk.StructureType.image_view_create_info, .image = image, .format = img_format.format, .subresource_range = subresource_range, .view_type = vk.ImageViewType.@"2d", .components = vk.ComponentMapping{
                 .a = vk.ComponentSwizzle.a,
                 .r = vk.ComponentSwizzle.r,
                 .g = vk.ComponentSwizzle.g,
                 .b = vk.ComponentSwizzle.b,
             } }, null);
             this.images[i] = .{ .image = image, .view = view };
+            image_mem_barriers[i] = vk.ImageMemoryBarrier2{
+                .s_type = vk.StructureType.image_memory_barrier_2,
+                .image = image,
+                .new_layout = vk.ImageLayout.present_src_khr,
+                .old_layout = vk.ImageLayout.undefined,
+                .subresource_range = subresource_range,
+                .src_queue_family_index = qfi,
+                .dst_queue_family_index = qfi,
+                .src_access_mask = vk.AccessFlags2{},
+                .src_stage_mask = vk.PipelineStageFlags2{},
+                .dst_access_mask = vk.AccessFlags2{},
+                .dst_stage_mask = vk.PipelineStageFlags2{
+                    .bottom_of_pipe_bit = true,
+                },
+            };
         }
+        device.cmdPipelineBarrier2(cmd_buffers[0], &vk.DependencyInfo{
+            .s_type = vk.StructureType.dependency_info,
+            .buffer_memory_barrier_count = 0,
+            .memory_barrier_count = 0,
+            .image_memory_barrier_count = @intCast(image_mem_barriers.len),
+            .p_image_memory_barriers = image_mem_barriers.ptr,
+        });
+        try device.endCommandBuffer(cmd_buffers[0]);
+
+        try device.queueSubmit2(queue, 1, &[1]vk.SubmitInfo2{vk.SubmitInfo2{
+            .s_type = vk.StructureType.submit_info_2,
+            .command_buffer_info_count = 1,
+            .p_command_buffer_infos = &[1]vk.CommandBufferSubmitInfo{vk.CommandBufferSubmitInfo{
+                .s_type = vk.StructureType.command_buffer_submit_info,
+                .command_buffer = cmd_buffers[0],
+                .device_mask = 0,
+            }},
+            .p_wait_semaphore_infos = null,
+            .p_signal_semaphore_infos = null,
+        }}, vk.Fence.null_handle);
+        try device.deviceWaitIdle();
+        try device.resetCommandPool(cmd_pool, vk.CommandPoolResetFlags{ .release_resources_bit = true });
     }
 
     fn deinit(this: *Swapchain, device: Device, allocator: Allocator) void {
-        defer allocator.free(this.images);
         if (this.handle == null) {
             return;
         }
+
+        device.destroyFence(this.acquire_fence, null);
+        defer allocator.free(this.images);
         for (this.images) |image| {
             device.destroyImageView(image.view, null);
         }
         device.destroySwapchainKHR(this.handle.?, null);
+    }
+
+    fn acquire_next_image(this: *Swapchain, device: Device) !void {
+        std.debug.assert(this.acquire_fence != vk.Fence.null_handle);
+        const acquire = try device.acquireNextImageKHR(this.handle.?, std.math.maxInt(u64), vk.Semaphore.null_handle, this.acquire_fence);
+        const fences = [1]vk.Fence{this.acquire_fence};
+        if (try device.waitForFences(1, &fences, vk.TRUE, std.math.maxInt(u64)) != vk.Result.success) {
+            vulkan_init_failure("Failed to acquire swapchain next image!");
+        }
+
+        try device.resetFences(1, &fences);
+
+        this.current_image = acquire.image_index;
+    }
+
+    fn present(this: *Swapchain, device: Device, queue: vk.Queue) !void {
+        const present_info = vk.PresentInfoKHR{
+            .s_type = vk.StructureType.present_info_khr,
+            .p_image_indices = &[1]u32{this.current_image},
+            .p_results = null,
+            .p_swapchains = &[1]vk.SwapchainKHR{this.handle.?},
+            .swapchain_count = 1,
+            .p_wait_semaphores = null,
+            .wait_semaphore_count = 0,
+        };
+        const result = try device.queuePresentKHR(queue, &present_info);
+        if (result != vk.Result.success) {
+            vulkan_init_failure("Failed to present acquired image");
+        }
     }
 };
 
@@ -201,7 +295,7 @@ pub const Renderer = struct {
         errdefer device.handle.destroyDevice(null);
 
         var swapchain = Swapchain{};
-        try swapchain.init(instance, physical_device.device, device.handle, surface, allocator);
+        try swapchain.init(instance, physical_device.device, device.handle, surface, device.queue.handle, device.queue.qfi, allocator);
 
         std.log.info("Picked device {s}\n", .{physical_device.properties.device_name});
 
@@ -226,12 +320,13 @@ pub const Renderer = struct {
         this.instance.destroyInstance(null);
     }
 
-    pub fn start_rendering(this: *Renderer) void {
+    pub fn start_rendering(this: *Renderer) !void {
         this.render_list.clear();
+        try this.swapchain.acquire_next_image(this.device.handle);
     }
 
-    pub fn render(this: *Renderer) void {
-        _ = this;
+    pub fn render(this: *Renderer) !void {
+        try this.swapchain.present(this.device.handle, this.device.queue.handle);
     }
 
     fn create_vulkan_instance(vkb: *const BaseDispatch, window: *sdl.SDL_Window, allocator: Allocator) !Instance {
@@ -258,7 +353,15 @@ pub const Renderer = struct {
             sdl_util.sdl_panic();
         }
 
-        const instance = try vkb.createInstance(&.{ .p_application_info = &app_info, .enabled_extension_count = @intCast(exts.items.len), .pp_enabled_extension_names = exts.items.ptr }, null);
+        const required_layers: [*]const [*:0]const u8 = &.{"VK_LAYER_KHRONOS_validation"};
+
+        const instance = try vkb.createInstance(&.{
+            .p_application_info = &app_info,
+            .enabled_extension_count = @intCast(exts.items.len),
+            .pp_enabled_extension_names = exts.items.ptr,
+            .enabled_layer_count = 1,
+            .pp_enabled_layer_names = required_layers,
+        }, null);
 
         const vki = try allocator.create(InstanceDispatch);
         errdefer allocator.destroy(vki);
@@ -364,7 +467,13 @@ pub const Renderer = struct {
             },
         };
 
-        const device_create_info = vk.DeviceCreateInfo{ .queue_create_info_count = 1, .p_queue_create_infos = &queue_create_info, .enabled_extension_count = @intCast(required_device_extensions.len), .pp_enabled_extension_names = &required_device_extensions };
+        var synchronization2 = vk.PhysicalDeviceSynchronization2Features{
+            .p_next = null,
+            .s_type = vk.StructureType.physical_device_synchronization_2_features,
+            .synchronization_2 = vk.TRUE,
+        };
+        var features2 = vk.PhysicalDeviceFeatures2{ .s_type = vk.StructureType.physical_device_features_2, .p_next = &synchronization2, .features = .{} };
+        const device_create_info = vk.DeviceCreateInfo{ .s_type = vk.StructureType.device_create_info, .p_next = &features2, .queue_create_info_count = 1, .p_queue_create_infos = &queue_create_info, .enabled_extension_count = @intCast(required_device_extensions.len), .pp_enabled_extension_names = &required_device_extensions };
 
         const device = try instance.createDevice(physical_device.device, &device_create_info, null);
         const vkd = try allocator.create(DeviceDispatch);
@@ -411,4 +520,14 @@ fn message_callback(
 fn vulkan_init_failure(message: []const u8) noreturn {
     sdl_util.message_box("Vulkan initialization failed", message, .Error);
     std.debug.panic("Vulkan  init error", .{});
+}
+
+fn make_fence(device: Device, signaled: bool) !vk.Fence {
+    return try device.createFence(&vk.FenceCreateInfo{ .s_type = vk.StructureType.fence_create_info, .flags = vk.FenceCreateFlags{ .signaled_bit = signaled } }, null);
+}
+
+fn make_semaphore(device: Device) !vk.Semaphore {
+    return try device.createSemaphore(&vk.SemaphoreCreateInfo{
+        .s_type = vk.StructureType.semaphore_create_info,
+    }, null);
 }
