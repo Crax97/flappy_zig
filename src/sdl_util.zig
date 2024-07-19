@@ -15,7 +15,7 @@ pub fn message_box(title: []const u8, content: []const u8, kind: MessageBoxKind)
         .Warning => SDL.SDL_MESSAGEBOX_WARNING,
     };
 
-    if (SDL.SDL_ShowSimpleMessageBox(sdl_mbox_flags, title.ptr, content.ptr, null) != 0) {
+    if (SDL.SDL_ShowSimpleMessageBox(@intCast(sdl_mbox_flags), title.ptr, content.ptr, null) != 0) {
         sdl_panic();
     }
 }
