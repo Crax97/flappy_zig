@@ -1,5 +1,4 @@
 const std = @import("std");
-const sdl = @import("thirdparty/sdl_zig/build.zig");
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -16,15 +15,16 @@ pub fn build(b: *std.Build) !void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const sdk = sdl.init(b, null, null);
     const exe = b.addExecutable(.{
         .name = "gamefun",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
-    sdk.link(exe, .dynamic, .SDL2);
+    exe.addIncludePath(.{ .cwd_relative = "thirdparty/sdl/include" });
+    exe.linkSystemLibrary("SDL2");
 
     const registry = "thirdparty/vulkan/vk.xml";
     const vk_gen = b.dependency("vulkan_zig", .{}).artifact("vulkan-zig-generator");
@@ -35,7 +35,6 @@ pub fn build(b: *std.Build) !void {
     });
 
     exe.root_module.addImport("vk", vk_zig);
-    exe.root_module.addImport("sdl2", sdk.getNativeModuleVulkan(vk_zig));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

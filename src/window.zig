@@ -1,5 +1,5 @@
 const std = @import("std");
-const SDL = @import("sdl2");
+const SDL = @import("clibs.zig");
 const sdl_panic = @import("sdl_util.zig").sdl_panic;
 
 pub const WindowConfig = struct {

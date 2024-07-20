@@ -1,5 +1,5 @@
 const std = @import("std");
-const SDL = @import("sdl2");
+const SDL = @import("clibs.zig");
 
 pub fn sdl_panic() noreturn {
     const sdl_err = SDL.SDL_GetError();

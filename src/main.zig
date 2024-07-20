@@ -1,5 +1,4 @@
 const std = @import("std");
-const SDL = @import("sdl2");
 const gen_arena = @import("gen_arena.zig");
 const world = @import("ecs/world.zig");
 const ComponentBegin = @import("ecs/component.zig").ComponentBegin;
@@ -9,13 +8,17 @@ const window = @import("window.zig");
 const sdl_util = @import("sdl_util.zig");
 const engine = @import("engine.zig");
 
+const SDL = @import("clibs.zig");
+
 const World = world.World;
 
 const FlappyGame = struct {
-    bird_texture: engine.Texture = undefined,
+    // bird_texture: engine.Texture = undefined,
 
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        self.bird_texture = try load_texture_from_file(engine_inst, "./bird.png");
+        _ = self;
+        _ = engine_inst;
+        // self.bird_texture = try load_texture_from_file(engine_inst, "./bird.png");
     }
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         _ = self;
