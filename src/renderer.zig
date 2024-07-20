@@ -1,6 +1,6 @@
 const std = @import("std");
-const c = @import("clibs.zig");
 const sdl_util = @import("sdl_util.zig");
+const c = @import("clibs.zig");
 const Window = @import("window.zig").Window;
 const Allocator = std.mem.Allocator;
 
@@ -263,6 +263,7 @@ pub const Renderer = struct {
     instance: c.VkInstance,
     funcs: VkFuncs,
     allocator: Allocator,
+    vk_allocator: c.VmaAllocator,
 
     debug_utils_messenger: c.VkDebugUtilsMessengerEXT,
 
@@ -301,9 +302,19 @@ pub const Renderer = struct {
 
         std.log.info("Picked device {s}\n", .{physical_device.properties.deviceName});
 
+        var vk_allocator: c.VmaAllocator = undefined;
+
+        vk_check(c.vmaCreateAllocator(&c.VmaAllocatorCreateInfo{
+            .flags = 0,
+            .device = device.handle,
+            .instance = instance,
+            .physicalDevice = physical_device.device,
+        }, &vk_allocator), "Failed to create vma allocator");
+
         return .{
             .instance = instance,
             .allocator = allocator,
+            .vk_allocator = vk_allocator,
 
             .funcs = funcs,
             .debug_utils_messenger = debug_utils_messenger,
@@ -318,6 +329,8 @@ pub const Renderer = struct {
 
     pub fn deinit(this: *Renderer) void {
         this.render_list.deinit();
+
+        c.vmaDestroyAllocator(this.vk_allocator);
         this.swapchain.deinit(this.device.handle, this.allocator);
         c.vkDestroyDevice(this.device.handle, null);
         c.vkDestroySurfaceKHR(this.instance, this.surface, null);

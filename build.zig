@@ -23,6 +23,9 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
 
+    // Some libs are c++ libs
+    exe.linkLibCpp();
+
     const env_map = try std.process.getEnvMap(b.allocator);
 
     // SDL
@@ -38,6 +41,10 @@ pub fn build(b: *std.Build) !void {
         exe.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
         exe.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
     }
+
+    // VMA
+    exe.addIncludePath(b.path("thirdparty/vma/include"));
+    exe.addCSourceFile(.{ .file = b.path("src/vma.cpp") });
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
