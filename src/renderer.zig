@@ -87,7 +87,6 @@ const Swapchain = struct {
         const present_mode = vk.PresentModeKHR.fifo_khr;
         const flags = vk.ImageUsageFlags{
             .sampled_bit = true,
-            .storage_bit = true,
             .transfer_src_bit = true,
             .transfer_dst_bit = true,
             .color_attachment_bit = true,
@@ -409,11 +408,12 @@ pub const Renderer = struct {
         }
         const devices = try allocator.alloc(vk.PhysicalDevice, pdevice_count);
         defer allocator.free(devices);
-        std.mem.sort(vk.PhysicalDevice, devices, funcs.SortContext{ .instance = instance }, funcs.sort_physical_devices);
 
         if (try instance.enumeratePhysicalDevices(&pdevice_count, devices.ptr) != vk.Result.success) {
             vulkan_init_failure("Failed to enumerate physical devices");
         }
+        std.mem.sort(vk.PhysicalDevice, devices, funcs.SortContext{ .instance = instance }, funcs.sort_physical_devices);
+
         std.log.debug("{d} candidate devices", .{pdevice_count});
 
         for (devices, 0..) |device, idx| {
