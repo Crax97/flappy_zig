@@ -49,20 +49,37 @@ fn vk_check(expr: c.VkResult, comptime errmsg: []const u8) void {
         vulkan_init_failure(errmsg);
     }
 }
-const VkFuncs = struct {
+
+fn loadFunc(instance: c.VkInstance, comptime T: type, comptime funcname: [*c]const u8) T {
+    const func: T = @ptrCast(c.vkGetInstanceProcAddr(instance, funcname));
+    return func;
+}
+
+const DebugUtilsMessengerExt = struct {
     create_debug_messenger: c.PFN_vkCreateDebugUtilsMessengerEXT,
     destroy_debug_messenger: c.PFN_vkDestroyDebugUtilsMessengerEXT,
+    instance: c.VkDebugUtilsMessengerEXT,
 
-    fn loadFunc(instance: c.VkInstance, comptime T: type, comptime funcname: [*c]const u8) T {
-        const func: T = @ptrCast(c.vkGetInstanceProcAddr(instance, funcname));
-        return func;
+    fn init(instance: c.VkInstance) ?DebugUtilsMessengerExt {
+        const debug_utils = c.VkDebugUtilsMessengerCreateInfoEXT{ .sType = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT, .messageSeverity = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
+            c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+            c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+            c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT, .messageType = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+            c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
+            c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT, .pfnUserCallback = message_callback };
+        const create_debug_messenger = loadFunc(instance, c.PFN_vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT");
+        const destroy_debug_messenger = loadFunc(instance, c.PFN_vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT");
+        var debug_utils_messenger: c.VkDebugUtilsMessengerEXT = undefined;
+        vk_check(create_debug_messenger.?(instance, &debug_utils, null, &debug_utils_messenger), "Failed to create debug messenger");
+        return .{
+            .create_debug_messenger = create_debug_messenger,
+            .destroy_debug_messenger = destroy_debug_messenger,
+            .instance = debug_utils_messenger,
+        };
     }
 
-    fn init(instance: c.VkInstance) VkFuncs {
-        return .{
-            .create_debug_messenger = loadFunc(instance, c.PFN_vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT"),
-            .destroy_debug_messenger = loadFunc(instance, c.PFN_vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT"),
-        };
+    fn deinit(this: *DebugUtilsMessengerExt, instance: c.VkInstance) void {
+        this.destroy_debug_messenger.?(instance, this.instance, null);
     }
 };
 
@@ -261,11 +278,9 @@ const RenderList = struct {
 
 pub const Renderer = struct {
     instance: c.VkInstance,
-    funcs: VkFuncs,
+    debug_utils: ?DebugUtilsMessengerExt,
     allocator: Allocator,
     vk_allocator: c.VmaAllocator,
-
-    debug_utils_messenger: c.VkDebugUtilsMessengerEXT,
 
     surface: c.VkSurfaceKHR,
     physical_device: VkPhysicalDevice,
@@ -279,16 +294,7 @@ pub const Renderer = struct {
         const instance = try create_vulkan_instance(window.window, allocator);
         errdefer c.vkDestroyInstance(instance, null);
 
-        const funcs = VkFuncs.init(instance);
-
-        const debug_utils = c.VkDebugUtilsMessengerCreateInfoEXT{ .sType = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT, .messageSeverity = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT |
-            c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
-            c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-            c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT, .messageType = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-            c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
-            c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT, .pfnUserCallback = message_callback };
-        var debug_utils_messenger: c.VkDebugUtilsMessengerEXT = undefined;
-        vk_check(funcs.create_debug_messenger.?(instance, &debug_utils, null, &debug_utils_messenger), "Failed to create debug messenger");
+        const debug_utils = DebugUtilsMessengerExt.init(instance);
 
         const surface = create_vulkan_surface(window.window, instance);
         errdefer c.vkDestroySurfaceKHR(instance, surface, null);
@@ -316,8 +322,7 @@ pub const Renderer = struct {
             .allocator = allocator,
             .vk_allocator = vk_allocator,
 
-            .funcs = funcs,
-            .debug_utils_messenger = debug_utils_messenger,
+            .debug_utils = debug_utils,
             .surface = surface,
             .physical_device = physical_device,
             .device = device,
@@ -334,7 +339,11 @@ pub const Renderer = struct {
         this.swapchain.deinit(this.device.handle, this.allocator);
         c.vkDestroyDevice(this.device.handle, null);
         c.vkDestroySurfaceKHR(this.instance, this.surface, null);
-        this.funcs.destroy_debug_messenger.?(this.instance, this.debug_utils_messenger, null);
+
+        if (this.debug_utils) |*utils| {
+            utils.deinit(this.instance);
+        }
+
         c.vkDestroyInstance(this.instance, null);
     }
 
