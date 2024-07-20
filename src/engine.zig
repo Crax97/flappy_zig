@@ -43,21 +43,18 @@ pub const Game = struct {
 
 pub const Engine = struct {
     window: window.Window,
-    // renderer: renderer.Renderer,
+    renderer: renderer.Renderer,
     running: bool = true,
     pub fn init(window_config: window.WindowConfig, allocator: std.mem.Allocator) !Engine {
-        _ = allocator;
-        const win = window.Window.init(window_config);
+        var win = window.Window.init(window_config);
 
-        // const renderer_instance = try renderer.Renderer.init(&win, allocator);
+        const renderer_instance = try renderer.Renderer.init(&win, allocator);
 
-        // return .{ .window = win, .renderer = renderer_instance };
-
-        return .{ .window = win };
+        return .{ .window = win, .renderer = renderer_instance };
     }
 
     pub fn deinit(this: *Engine) void {
-        // this.renderer.deinit();
+        this.renderer.deinit();
         this.window.deinit();
     }
 
@@ -74,11 +71,9 @@ pub const Engine = struct {
                 }
             }
 
-            // try this.renderer.start_rendering();
-
+            try this.renderer.start_rendering();
             try game.update(game.target, this);
-
-            // try this.renderer.render();
+            try this.renderer.render();
         }
 
         try game.end(game.target, this);

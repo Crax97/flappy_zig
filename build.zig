@@ -23,18 +23,21 @@ pub fn build(b: *std.Build) !void {
         .link_libc = true,
     });
 
+    const env_map = try std.process.getEnvMap(b.allocator);
+
+    // SDL
     exe.addIncludePath(.{ .cwd_relative = "thirdparty/sdl/include" });
     exe.linkSystemLibrary("SDL2");
 
-    const registry = "thirdparty/vulkan/vk.xml";
-    const vk_gen = b.dependency("vulkan_zig", .{}).artifact("vulkan-zig-generator");
-    const vk_gen_cmd = b.addRunArtifact(vk_gen);
-    vk_gen_cmd.addArg(registry);
-    const vk_zig = b.addModule("vulkan-zig", .{
-        .root_source_file = vk_gen_cmd.addOutputFileArg("vk.zig"),
-    });
-
-    exe.root_module.addImport("vk", vk_zig);
+    // Vulkan
+    const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
+    exe.linkSystemLibrary(
+        vk_lib_name,
+    );
+    if (env_map.get("VULKAN_SDK")) |path| {
+        exe.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
+        exe.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
+    }
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
