@@ -125,12 +125,10 @@ const Swapchain = struct {
         const present_mode = c.VK_PRESENT_MODE_FIFO_KHR;
         const flags = c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT | c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-        var image_count: u32 = 3;
-
         const swapchain_create_info = c.VkSwapchainCreateInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
             .surface = surface,
-            .minImageCount = image_count,
+            .minImageCount = Renderer.FRAMES_IN_FLIGHT,
             .imageFormat = img_format.format,
             .imageColorSpace = img_format.colorSpace,
             .imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
@@ -150,12 +148,16 @@ const Swapchain = struct {
         errdefer c.vkDestroySwapchainKHR(device, swapchain_instance, null);
         this.* = Swapchain{ .handle = swapchain_instance, .current_image = 0, .extents = swapchain_create_info.imageExtent, .format = img_format, .images = try allocator.alloc(SwapchainImage, 3), .present_mode = present_mode, .acquire_fence = acquire_fence };
 
-        const images = try allocator.alloc(c.VkImage, image_count);
-        const views = try allocator.alloc(c.VkImageView, image_count);
+        var presentable_images: u32 = undefined;
+        vk_check(c.vkGetSwapchainImagesKHR(device, swapchain_instance, &presentable_images, null), "Failed to get the number of presentable images");
+
+        const images = try allocator.alloc(c.VkImage, Renderer.FRAMES_IN_FLIGHT);
+        const views = try allocator.alloc(c.VkImageView, Renderer.FRAMES_IN_FLIGHT);
         defer allocator.free(images);
         defer allocator.free(views);
 
-        vk_check(c.vkGetSwapchainImagesKHR(device, swapchain_instance, &image_count, images.ptr), "Failed to get images from swapchain");
+        vk_check(c.vkGetSwapchainImagesKHR(device, swapchain_instance, &presentable_images, images.ptr), "Failed to get images from swapchain");
+
         var cmd_pool: c.VkCommandPool = undefined;
         vk_check(c.vkCreateCommandPool(device, &c.VkCommandPoolCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = qfi }, null, &cmd_pool), "Failed to create command pool");
         defer c.vkDestroyCommandPool(device, cmd_pool, null);
@@ -286,7 +288,52 @@ const RenderList = struct {
     }
 };
 
+const RenderState = struct {
+    command_pool: c.VkCommandPool,
+    work_done_fence: c.VkFence,
+    main_command_buffer: c.VkCommandBuffer,
+
+    fn init(device: VkDevice) !RenderState {
+        var command_pool: c.VkCommandPool = undefined;
+        vk_check(c.vkCreateCommandPool(device.handle, &c.VkCommandPoolCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .pNext = null, .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = device.queue.qfi }, null, &command_pool), "Failed to create RenderState command pool");
+
+        var command_buffer: c.VkCommandBuffer = undefined;
+        vk_check(c.vkAllocateCommandBuffers(device.handle, &[_]c.VkCommandBufferAllocateInfo{
+            c.VkCommandBufferAllocateInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .pNext = null, .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandPool = command_pool, .commandBufferCount = 1 },
+        }, &command_buffer), "Failed to allocate main command buffer");
+
+        return .{
+            .command_pool = command_pool,
+            .work_done_fence = try make_fence(device.handle, true),
+            .main_command_buffer = command_buffer,
+        };
+    }
+
+    fn start_frame(this: *RenderState, device: VkDevice) void {
+        vk_check(c.vkWaitForFences(device.handle, 1, &[_]c.VkFence{this.work_done_fence}, c.VK_TRUE, std.math.maxInt(u64)), "Could not wait for work done fence");
+        vk_check(c.vkResetFences(device.handle, 1, &[_]c.VkFence{this.work_done_fence}), "Could not reset work done fence");
+        const command_buffer_begin = c.VkCommandBufferBeginInfo{ .pNext = null, .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = 0, .pInheritanceInfo = null };
+
+        vk_check(c.vkBeginCommandBuffer(this.main_command_buffer, &[_]c.VkCommandBufferBeginInfo{command_buffer_begin}), "Failed to begin command buffer");
+    }
+
+    fn end_frame(this: *RenderState, device: VkDevice) void {
+        vk_check(c.vkEndCommandBuffer(this.main_command_buffer), "Failed to end main command buffer");
+        const cmd_buf_info = c.VkCommandBufferSubmitInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .pNext = null, .deviceMask = 0, .commandBuffer = this.main_command_buffer };
+        const submit_info = c.VkSubmitInfo2{ .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2, .flags = 0, .waitSemaphoreInfoCount = 0, .pWaitSemaphoreInfos = null, .commandBufferInfoCount = 1, .pCommandBufferInfos = &[_]c.VkCommandBufferSubmitInfo{cmd_buf_info}, .signalSemaphoreInfoCount = 0, .pSignalSemaphoreInfos = null };
+        vk_check(c.vkQueueSubmit2(device.queue.handle, 1, &[_]c.VkSubmitInfo2{submit_info}, this.work_done_fence), "Failed to submit to main queue");
+    }
+
+    fn deinit(this: *RenderState, device: VkDevice) void {
+        c.vkFreeCommandBuffers(device.handle, this.command_pool, 1, &[_]c.VkCommandBuffer{this.main_command_buffer});
+        c.vkDestroyFence(device.handle, this.work_done_fence, null);
+        c.vkDestroyCommandPool(device.handle, this.command_pool, null);
+    }
+};
+
 pub const Renderer = struct {
+    const FRAMES_IN_FLIGHT = 3;
+
     instance: c.VkInstance,
     debug_utils: ?DebugUtilsMessengerExt,
     allocator: Allocator,
@@ -298,7 +345,10 @@ pub const Renderer = struct {
 
     swapchain: Swapchain,
 
+    render_states: []RenderState,
     render_list: RenderList,
+
+    current_render_state: usize = 0,
 
     pub fn init(window: *Window, allocator: Allocator) !Renderer {
         const instance = try create_vulkan_instance(window.window, allocator);
@@ -327,6 +377,13 @@ pub const Renderer = struct {
             .physicalDevice = physical_device.device,
         }, &vk_allocator), "Failed to create vma allocator");
 
+        var render_states = try allocator.alloc(RenderState, Renderer.FRAMES_IN_FLIGHT);
+        errdefer allocator.free(render_states);
+
+        for (0..Renderer.FRAMES_IN_FLIGHT) |i| {
+            render_states[i] = try RenderState.init(device);
+        }
+
         return .{
             .instance = instance,
             .allocator = allocator,
@@ -339,10 +396,16 @@ pub const Renderer = struct {
             .swapchain = swapchain,
 
             .render_list = RenderList.init(allocator),
+            .render_states = render_states,
         };
     }
 
     pub fn deinit(this: *Renderer) void {
+        vk_check(c.vkDeviceWaitIdle(this.device.handle), "Failed to wait for device idle in uninit");
+        for (0..Renderer.FRAMES_IN_FLIGHT) |i| {
+            this.render_states[i].deinit(this.device);
+        }
+
         this.render_list.deinit();
 
         c.vmaDestroyAllocator(this.vk_allocator);
@@ -358,12 +421,38 @@ pub const Renderer = struct {
     }
 
     pub fn start_rendering(this: *Renderer) !void {
+        var render_state = &this.render_states[this.current_render_state];
+        render_state.start_frame(this.device);
         this.render_list.clear();
         try this.swapchain.acquire_next_image(this.device);
     }
 
     pub fn render(this: *Renderer) !void {
+        var render_state = &this.render_states[this.current_render_state];
+
+        const current_img_view = this.swapchain.images[this.swapchain.current_image].view;
+        const rendering_info = c.VkRenderingInfo{
+            .sType = c.VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .renderArea = c.VkRect2D{
+                .offset = .{},
+                .extent = this.swapchain.extents,
+            },
+            .pColorAttachments = &[1]c.VkRenderingAttachmentInfo{c.VkRenderingAttachmentInfo{ .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE, .imageView = current_img_view, .imageLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, .clearValue = c.VkClearValue{ .color = c.VkClearColorValue{
+                .uint32 = [4]u32{ 0, 0, 0, 0 },
+            } } }},
+            .colorAttachmentCount = 1,
+            .layerCount = 1,
+            .pDepthAttachment = null,
+        };
+        c.vkCmdBeginRendering(render_state.main_command_buffer, &rendering_info);
+
+        // Do something
+
+        c.vkCmdEndRendering(render_state.main_command_buffer);
+
+        render_state.end_frame(this.device);
         try this.swapchain.present(this.device);
+        this.current_render_state = (this.current_render_state + 1) % Renderer.FRAMES_IN_FLIGHT;
     }
 
     fn create_vulkan_instance(window: *c.SDL_Window, allocator: Allocator) !c.VkInstance {
@@ -507,13 +596,12 @@ pub const Renderer = struct {
             },
         };
 
-        var synchronization2 = c.VkPhysicalDeviceSynchronization2Features{
-            .pNext = null,
-            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES,
+        var features13 = c.VkPhysicalDeviceVulkan13Features{
+            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
             .synchronization2 = c.VK_TRUE,
+            .dynamicRendering = c.VK_TRUE,
         };
-        var features2 = c.VkPhysicalDeviceFeatures2{ .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &synchronization2, .features = .{} };
-        const device_create_info = c.VkDeviceCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &features2, .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_create_info, .enabledExtensionCount = @intCast(required_device_extensions.len), .ppEnabledExtensionNames = &required_device_extensions };
+        const device_create_info = c.VkDeviceCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &features13, .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_create_info, .enabledExtensionCount = @intCast(required_device_extensions.len), .ppEnabledExtensionNames = &required_device_extensions };
 
         var device: c.VkDevice = undefined;
         vk_check(c.vkCreateDevice(physical_device.device, &device_create_info, null, &device), "Failed to create device");
