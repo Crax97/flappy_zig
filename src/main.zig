@@ -13,12 +13,10 @@ const SDL = @import("clibs.zig");
 const World = world.World;
 
 const FlappyGame = struct {
-    // bird_texture: engine.Texture = undefined,
+    bird_texture: engine.Texture = undefined,
 
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        _ = self;
-        _ = engine_inst;
-        // self.bird_texture = try load_texture_from_file(engine_inst, "./bird.png");
+        self.bird_texture = try load_texture_from_file(engine_inst, "./bird.png");
     }
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         _ = self;
@@ -28,16 +26,14 @@ const FlappyGame = struct {
         // renderer.draw_texture(self.bird_texture, vec3(bird_transform, 0.0));
     }
     pub fn end(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        _ = self;
-        _ = engine_inst;
+        engine_inst.renderer.free_texture(self.bird_texture);
     }
 };
 
 fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!engine.Texture {
     _ = path;
-    _ = inst;
 
-    return undefined;
+    return try inst.renderer.alloc_texture(engine.Texture.CreateInfo{ .width = 512, .height = 512, .format = .rgba_8, .initial_bytes = null });
 }
 
 pub fn main() !void {

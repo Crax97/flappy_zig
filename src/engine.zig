@@ -7,7 +7,7 @@ const renderer = @import("renderer.zig");
 const ecs = @import("ecs/ecs.zig");
 const World = ecs.World;
 
-// pub const Texture = renderer.Texture;
+pub const Texture = renderer.Texture;
 
 pub const Game = struct {
     target: *anyopaque,

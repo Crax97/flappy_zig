@@ -9,7 +9,7 @@ const required_device_extensions = [_][*:0]const u8{ "VK_KHR_swapchain", "VK_KHR
 pub fn Handle(comptime T: type) type {
     _ = T;
     return struct {
-        const NULL = std.math.maxInt(u64);
+        const NULL = std.math.maxInt(u32);
         id: u32 = NULL,
 
         fn is_null(this: @This()) bool {
@@ -20,21 +20,28 @@ pub fn Handle(comptime T: type) type {
 
 pub const Texture = struct {
     pub const CreateInfo = struct {
-        width: usize,
-        height: usize,
+        width: u32,
+        height: u32,
+        depth: u32 = 1,
         format: TextureFormat,
         initial_bytes: ?[]const u8,
         flags: TextureFlags = .{},
     };
+    handle: TextureHandle,
     image: c.VkImage,
     view: c.VkImageView,
+    allocation: c.VmaAllocation,
 };
 
 pub const TextureFormat = enum {
     rgba_8,
 };
 
-pub const TextureFlags = packed struct {};
+pub const TextureFlags = packed struct {
+    cpu_readable: bool = false,
+    storage_image: bool = false,
+    trasfer_src: bool = false,
+};
 
 pub const Renderer = struct {
     const FRAMES_IN_FLIGHT = 3;
@@ -126,6 +133,15 @@ pub const Renderer = struct {
         }
 
         c.vkDestroyInstance(this.instance, null);
+    }
+
+    pub fn alloc_texture(this: *Renderer, description: Texture.CreateInfo) !Texture {
+        const allocation = try this.texture_allocator.alloc_texture(this.device, description);
+        return allocation.texture;
+    }
+
+    pub fn free_texture(this: *Renderer, texture: Texture) void {
+        this.texture_allocator.free_texture(this.device, texture.handle);
     }
 
     pub fn start_rendering(this: *Renderer) !void {
@@ -677,7 +693,10 @@ const RenderState = struct {
     }
 };
 
-const Textures = std.ArrayList(Texture);
+const TextureHandle = Handle(Texture);
+const Textures = std.ArrayList(?Texture);
+const TextureAllocation = struct { texture: Texture, handle: TextureHandle };
+
 const TextureAllocator = struct {
     const num_descriptors: u32 = 16536;
     const bindless_textures_binding: u32 = 0;
@@ -690,6 +709,7 @@ const TextureAllocator = struct {
 
     allocator: Allocator,
     vk_allocator: c.VmaAllocator,
+    unused_handles: std.ArrayList(TextureHandle),
 
     fn init(device: VkDevice, allocator: Allocator, vma: c.VmaAllocator) !TextureAllocator {
         var layout: c.VkDescriptorSetLayout = undefined;
@@ -753,10 +773,94 @@ const TextureAllocator = struct {
 
             .allocator = allocator,
             .vk_allocator = vma,
+            .unused_handles = std.ArrayList(TextureHandle).init(allocator),
         };
     }
 
+    fn alloc_texture(this: *TextureAllocator, device: VkDevice, description: Texture.CreateInfo) !TextureAllocation {
+        var texture_handle: TextureHandle = undefined;
+        var texture: *?Texture = undefined;
+        if (this.unused_handles.items.len > 0) {
+            texture_handle = this.unused_handles.pop();
+            texture = &this.all_textures.items[texture_handle.id];
+        } else {
+            const len = this.all_textures.items.len;
+            texture = try this.all_textures.addOne();
+            texture_handle = TextureHandle{
+                .id = @intCast(len),
+            };
+        }
+
+        const usage: u32 = c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        const format = switch (description.format) {
+            .rgba_8 => c.VK_FORMAT_R8G8B8A8_UINT,
+        };
+        const image_type = c.VK_IMAGE_TYPE_2D;
+        const image_desc = c.VkImageCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .extent = c.VkExtent3D{
+                .width = description.width,
+                .height = description.height,
+                .depth = description.depth,
+            },
+            .usage = usage,
+            .tiling = if (description.flags.cpu_readable) c.VK_IMAGE_TILING_LINEAR else c.VK_IMAGE_TILING_OPTIMAL,
+            .format = format,
+            .imageType = image_type,
+            .samples = c.VK_SAMPLE_COUNT_1_BIT,
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+            .pQueueFamilyIndices = &[_]u32{device.queue.qfi},
+            .queueFamilyIndexCount = 1,
+        };
+
+        var image = std.mem.zeroes(c.VkImage);
+
+        const mem_alloc_info = c.VmaAllocationCreateInfo{ .flags = 0, .usage = c.VMA_MEMORY_USAGE_AUTO, .memoryTypeBits = 0, .requiredFlags = 0 };
+        var allocation = std.mem.zeroes(c.VmaAllocation);
+        vk_check(c.vmaCreateImage(this.vk_allocator, &image_desc, &mem_alloc_info, &image, &allocation, null), "Failed to create image through vma");
+
+        const image_view_desc = c.VkImageViewCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .pNext = null, .image = image, .format = format, .flags = 0, .components = c.VkComponentMapping{
+            .r = c.VK_COMPONENT_SWIZZLE_R,
+            .g = c.VK_COMPONENT_SWIZZLE_G,
+            .b = c.VK_COMPONENT_SWIZZLE_B,
+            .a = c.VK_COMPONENT_SWIZZLE_A,
+        }, .viewType = c.VK_IMAGE_VIEW_TYPE_2D, .subresourceRange = c.VkImageSubresourceRange{ .layerCount = 1, .levelCount = 1, .baseMipLevel = 0, .baseArrayLayer = 0, .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT } };
+        var image_view = std.mem.zeroes(c.VkImageView);
+        vk_check(c.vkCreateImageView(device.handle, &image_view_desc, null, &image_view), "Could not create image view");
+
+        // write image view to descriptor set
+
+        texture.* = Texture{
+            .handle = texture_handle,
+            .view = image_view,
+            .image = image,
+            .allocation = allocation,
+        };
+        return TextureAllocation{
+            .handle = texture_handle,
+            .texture = texture.*.?,
+        };
+    }
+
+    fn free_texture(this: *TextureAllocator, device: VkDevice, tex_handle: TextureHandle) void {
+        const texture = this.all_textures.items[tex_handle.id].?;
+        this.all_textures.items[tex_handle.id] = null;
+
+        c.vkDestroyImageView(device.handle, texture.view, null);
+        c.vmaDestroyImage(this.vk_allocator, texture.image, texture.allocation);
+    }
+
     fn deinit(this: *TextureAllocator, device: VkDevice) void {
+        for (this.all_textures.items) |tex_maybe| {
+            if (tex_maybe) |*tex| {
+                this.free_texture(device, tex.handle);
+            }
+        }
+
         c.vkDestroyDescriptorSetLayout(device.handle, this.bindless_descriptor_set_layout, null);
         c.vkDestroyDescriptorPool(device.handle, this.bindless_descriptor_pool, null);
     }
