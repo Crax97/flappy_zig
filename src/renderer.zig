@@ -6,6 +6,370 @@ const Allocator = std.mem.Allocator;
 
 const required_device_extensions = [_][*:0]const u8{ "VK_KHR_swapchain", "VK_KHR_dynamic_rendering" };
 
+pub fn Handle(comptime T: type) type {
+    _ = T;
+    return struct {
+        const NULL = std.math.maxInt(u64);
+        id: u32 = NULL,
+
+        fn is_null(this: @This()) bool {
+            return this.id == NULL;
+        }
+    };
+}
+
+pub const Texture = struct {
+    pub const CreateInfo = struct {
+        width: usize,
+        height: usize,
+        format: TextureFormat,
+        initial_bytes: ?[]const u8,
+        flags: TextureFlags = .{},
+    };
+    image: c.VkImage,
+    view: c.VkImageView,
+};
+
+pub const TextureFormat = enum {
+    rgba_8,
+};
+
+pub const TextureFlags = packed struct {};
+
+pub const Renderer = struct {
+    const FRAMES_IN_FLIGHT = 3;
+
+    instance: c.VkInstance,
+    debug_utils: ?DebugUtilsMessengerExt,
+    allocator: Allocator,
+    vk_allocator: c.VmaAllocator,
+
+    surface: c.VkSurfaceKHR,
+    physical_device: VkPhysicalDevice,
+    device: VkDevice,
+
+    swapchain: Swapchain,
+
+    render_states: []RenderState,
+    render_list: RenderList,
+    texture_allocator: TextureAllocator,
+
+    current_render_state: usize = 0,
+
+    pub fn init(window: *Window, allocator: Allocator) !Renderer {
+        const instance = try create_vulkan_instance(window.window, allocator);
+        errdefer c.vkDestroyInstance(instance, null);
+
+        const debug_utils = DebugUtilsMessengerExt.init(instance);
+
+        const surface = create_vulkan_surface(window.window, instance);
+        errdefer c.vkDestroySurfaceKHR(instance, surface, null);
+
+        const physical_device = try select_physical_device(instance, allocator);
+        const device = try init_logical_device(physical_device, surface, allocator);
+        errdefer c.vkDestroyDevice(device.handle, null);
+
+        var swapchain = Swapchain{};
+        try swapchain.init(instance, physical_device.device, device.handle, surface, device.queue.handle, device.queue.qfi, allocator);
+
+        std.log.info("Picked device {s}\n", .{physical_device.properties.deviceName});
+
+        var vk_allocator: c.VmaAllocator = undefined;
+
+        vk_check(c.vmaCreateAllocator(&c.VmaAllocatorCreateInfo{
+            .flags = 0,
+            .device = device.handle,
+            .instance = instance,
+            .physicalDevice = physical_device.device,
+        }, &vk_allocator), "Failed to create vma allocator");
+
+        var render_states = try allocator.alloc(RenderState, Renderer.FRAMES_IN_FLIGHT);
+        errdefer allocator.free(render_states);
+
+        for (0..Renderer.FRAMES_IN_FLIGHT) |i| {
+            render_states[i] = try RenderState.init(device);
+        }
+
+        return .{
+            .instance = instance,
+            .allocator = allocator,
+            .vk_allocator = vk_allocator,
+
+            .debug_utils = debug_utils,
+            .surface = surface,
+            .physical_device = physical_device,
+            .device = device,
+            .swapchain = swapchain,
+
+            .render_list = RenderList.init(allocator),
+            .render_states = render_states,
+            .texture_allocator = try TextureAllocator.init(device, allocator, vk_allocator),
+        };
+    }
+
+    pub fn deinit(this: *Renderer) void {
+        vk_check(c.vkDeviceWaitIdle(this.device.handle), "Failed to wait for device idle in deinit");
+        for (0..Renderer.FRAMES_IN_FLIGHT) |i| {
+            this.render_states[i].deinit(this.device);
+        }
+
+        this.texture_allocator.deinit(this.device);
+        this.render_list.deinit();
+
+        c.vmaDestroyAllocator(this.vk_allocator);
+        this.swapchain.deinit(this.device.handle, this.allocator);
+        c.vkDestroyDevice(this.device.handle, null);
+        c.vkDestroySurfaceKHR(this.instance, this.surface, null);
+
+        if (this.debug_utils) |*utils| {
+            utils.deinit(this.instance);
+        }
+
+        c.vkDestroyInstance(this.instance, null);
+    }
+
+    pub fn start_rendering(this: *Renderer) !void {
+        var render_state = &this.render_states[this.current_render_state];
+        render_state.start_frame(this.device);
+        this.render_list.clear();
+        try this.swapchain.acquire_next_image(this.device);
+    }
+
+    pub fn render(this: *Renderer) !void {
+        var render_state = &this.render_states[this.current_render_state];
+
+        const current_img_view = this.swapchain.images[this.swapchain.current_image].view;
+        const rendering_info = c.VkRenderingInfo{
+            .sType = c.VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .renderArea = c.VkRect2D{
+                .offset = .{},
+                .extent = this.swapchain.extents,
+            },
+            .pColorAttachments = &[1]c.VkRenderingAttachmentInfo{c.VkRenderingAttachmentInfo{ .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE, .imageView = current_img_view, .imageLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, .clearValue = c.VkClearValue{ .color = c.VkClearColorValue{
+                .uint32 = [4]u32{ 0, 0, 0, 0 },
+            } } }},
+            .colorAttachmentCount = 1,
+            .layerCount = 1,
+            .pDepthAttachment = null,
+        };
+        c.vkCmdBeginRendering(render_state.main_command_buffer, &rendering_info);
+
+        // Do something
+
+        c.vkCmdEndRendering(render_state.main_command_buffer);
+
+        render_state.end_frame(this.device);
+        try this.swapchain.present(this.device);
+        this.current_render_state = (this.current_render_state + 1) % Renderer.FRAMES_IN_FLIGHT;
+    }
+
+    fn create_vulkan_instance(window: *c.SDL_Window, allocator: Allocator) !c.VkInstance {
+        const app_info = c.VkApplicationInfo{
+            .pApplicationName = "EngineApplication",
+            .pEngineName = "Engine",
+            .apiVersion = c.VK_API_VERSION_1_3,
+            .engineVersion = c.VK_MAKE_VERSION(0, 0, 0),
+            .applicationVersion = c.VK_MAKE_VERSION(0, 0, 0),
+        };
+        var ext_counts: c_uint = 0;
+        if (c.SDL_Vulkan_GetInstanceExtensions(window, &ext_counts, null) != c.SDL_TRUE) {
+            sdl_util.sdl_panic();
+        }
+
+        var exts = std.ArrayList([*c]const u8).init(allocator);
+        defer exts.deinit();
+        _ = try exts.addManyAsSlice(ext_counts);
+        try exts.append("VK_EXT_debug_utils");
+
+        if (c.SDL_Vulkan_GetInstanceExtensions(window, &ext_counts, exts.items.ptr) != c.SDL_TRUE) {
+            sdl_util.sdl_panic();
+        }
+
+        const required_layers: [*]const [*:0]const u8 = &.{"VK_LAYER_KHRONOS_validation"};
+
+        var instance: c.VkInstance = undefined;
+        vk_check(c.vkCreateInstance(&.{
+            .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+            .pApplicationInfo = &app_info,
+            .enabledExtensionCount = @intCast(exts.items.len),
+            .ppEnabledExtensionNames = exts.items.ptr,
+            .enabledLayerCount = 1,
+            .ppEnabledLayerNames = required_layers,
+        }, null, &instance), "Failed to create instance");
+
+        return instance;
+    }
+
+    fn create_vulkan_surface(window: *c.SDL_Window, instance: c.VkInstance) c.VkSurfaceKHR {
+        var surface: c.VkSurfaceKHR = undefined;
+        if (c.SDL_Vulkan_CreateSurface(window, instance, &surface) != c.SDL_TRUE) {
+            sdl_util.sdl_panic();
+        }
+        return surface;
+    }
+
+    fn select_physical_device(instance: c.VkInstance, allocator: Allocator) !VkPhysicalDevice {
+        const funcs = struct {
+            const SortContext = struct {
+                instance: c.VkInstance,
+            };
+
+            fn device_ty_priority(device_type: c.VkPhysicalDeviceType) usize {
+                return switch (device_type) {
+                    c.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU => 3,
+                    c.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU => 2,
+                    c.VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU => 1,
+                    else => 0,
+                };
+            }
+            fn sort_physical_devices(context: SortContext, a: c.VkPhysicalDevice, b: c.VkPhysicalDevice) bool {
+                _ = context;
+                var props_a: c.VkPhysicalDeviceProperties = undefined;
+                var props_b: c.VkPhysicalDeviceProperties = undefined;
+                c.vkGetPhysicalDeviceProperties(a, &props_a);
+                c.vkGetPhysicalDeviceProperties(b, &props_b);
+                const device_ty_a = device_ty_priority(props_a.deviceType);
+                const device_ty_b = device_ty_priority(props_b.deviceType);
+
+                return device_ty_a > device_ty_b;
+            }
+        };
+        var pdevice_count: u32 = undefined;
+        vk_check(c.vkEnumeratePhysicalDevices(instance, &pdevice_count, null), "Failed to enumerate devices");
+        const devices = try allocator.alloc(c.VkPhysicalDevice, pdevice_count);
+        defer allocator.free(devices);
+
+        vk_check(c.vkEnumeratePhysicalDevices(instance, &pdevice_count, devices.ptr), "Failed to get physical devices");
+
+        std.mem.sort(c.VkPhysicalDevice, devices, funcs.SortContext{ .instance = instance }, funcs.sort_physical_devices);
+
+        std.log.debug("{d} candidate devices", .{pdevice_count});
+
+        for (devices, 0..) |device, idx| {
+            var properties: c.VkPhysicalDeviceProperties = undefined;
+            c.vkGetPhysicalDeviceProperties(device, &properties);
+            std.log.debug("\t{d}) Device {s}", .{ idx, properties.deviceName });
+        }
+
+        for (devices) |device| {
+            var properties: c.VkPhysicalDeviceProperties = undefined;
+            var indexing_features: c.VkPhysicalDeviceDescriptorIndexingFeatures = undefined;
+            indexing_features.sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+            indexing_features.pNext = null;
+
+            var features_2: c.VkPhysicalDeviceFeatures2 = undefined;
+            features_2.sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features_2.pNext = &indexing_features;
+
+            c.vkGetPhysicalDeviceProperties(device, &properties);
+            c.vkGetPhysicalDeviceFeatures2(device, &features_2);
+
+            const supports_bindless_descriptors = indexing_features.descriptorBindingPartiallyBound == c.VK_TRUE and indexing_features.runtimeDescriptorArray == c.VK_TRUE and indexing_features.descriptorBindingSampledImageUpdateAfterBind == c.VK_TRUE;
+            if (properties.deviceType != c.VK_PHYSICAL_DEVICE_TYPE_CPU and supports_bindless_descriptors) {
+                var device_mem: c.VkPhysicalDeviceMemoryProperties = undefined;
+                c.vkGetPhysicalDeviceMemoryProperties(device, &device_mem);
+
+                return .{
+                    .device = device,
+                    .properties = properties,
+                    .device_memory = device_mem,
+                };
+            }
+        }
+        vulkan_init_failure("Failed to pick valid device");
+    }
+
+    fn init_logical_device(
+        physical_device: VkPhysicalDevice,
+        surface: c.VkSurfaceKHR,
+        allocator: Allocator,
+    ) !VkDevice {
+        var props_count: u32 = undefined;
+        c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device.device, &props_count, null);
+        const props = try allocator.alloc(c.VkQueueFamilyProperties, props_count);
+        defer allocator.free(props);
+        c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device.device, &props_count, props.ptr);
+
+        try ensure_device_extensions_are_available(physical_device, allocator);
+
+        var graphics_qfi: ?u32 = null;
+        for (props, 0..) |prop, idx| {
+            var supported: u32 = c.VK_FALSE;
+            if (prop.queueFlags & c.VK_QUEUE_GRAPHICS_BIT > 0 and c.vkGetPhysicalDeviceSurfaceSupportKHR(physical_device.device, @intCast(idx), surface, &supported) == c.VK_SUCCESS and supported == c.VK_TRUE) {
+                graphics_qfi = @intCast(idx);
+            }
+        }
+
+        if (graphics_qfi == null) {
+            vulkan_init_failure("Failed to pick a vulkan graphics queue");
+        }
+
+        const prios: [1]f32 = .{1.0};
+
+        const queue_create_info: [1]c.VkDeviceQueueCreateInfo = .{
+            c.VkDeviceQueueCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .queueCount = 1,
+                .queueFamilyIndex = graphics_qfi.?,
+                .pQueuePriorities = &prios,
+            },
+        };
+
+        // Request the features necessary for bindless texturess
+        var indexing_features: c.VkPhysicalDeviceDescriptorIndexingFeatures = std.mem.zeroes(c.VkPhysicalDeviceDescriptorIndexingFeatures);
+        indexing_features.sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        indexing_features.pNext = null;
+        indexing_features.runtimeDescriptorArray = c.VK_TRUE;
+        indexing_features.descriptorBindingPartiallyBound = c.VK_TRUE;
+        indexing_features.descriptorBindingSampledImageUpdateAfterBind = c.VK_TRUE;
+
+        var features_2: c.VkPhysicalDeviceFeatures2 = std.mem.zeroes(c.VkPhysicalDeviceFeatures2);
+        features_2.sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features_2.pNext = &indexing_features;
+
+        var features13 = c.VkPhysicalDeviceVulkan13Features{
+            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+            .pNext = &features_2,
+            .synchronization2 = c.VK_TRUE,
+            .dynamicRendering = c.VK_TRUE,
+        };
+        const device_create_info = c.VkDeviceCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &features13, .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_create_info, .enabledExtensionCount = @intCast(required_device_extensions.len), .ppEnabledExtensionNames = &required_device_extensions };
+
+        var device: c.VkDevice = undefined;
+        vk_check(c.vkCreateDevice(physical_device.device, &device_create_info, null, &device), "Failed to create device");
+
+        var queue: c.VkQueue = undefined;
+        c.vkGetDeviceQueue(device, graphics_qfi.?, 0, &queue);
+
+        return .{
+            .handle = device,
+            .queue = VkQueue{ .handle = queue, .qfi = graphics_qfi.? },
+        };
+    }
+};
+
+fn ensure_device_extensions_are_available(device: VkPhysicalDevice, allocator: Allocator) !void {
+    var supported_extension_count: u32 = undefined;
+    vk_check(c.vkEnumerateDeviceExtensionProperties(device.device, null, &supported_extension_count, null), "Failed to enumerate supported device extensions");
+    const extensions = try allocator.alloc(c.VkExtensionProperties, supported_extension_count);
+    vk_check(c.vkEnumerateDeviceExtensionProperties(device.device, null, &supported_extension_count, extensions.ptr), "Failed to get supported extensions");
+
+    outer: for (required_device_extensions) |ext| {
+        std.log.debug("Checking extension {s}", .{ext});
+        const ext_zig = std.mem.span(ext);
+        for (extensions) |dev_ext| {
+            const dev_ext_zig_len = std.mem.len(@as([*:0]u8, @ptrCast(@constCast(&dev_ext.extensionName))));
+            const dev_ext_zig = dev_ext.extensionName[0..dev_ext_zig_len];
+            if (std.mem.eql(u8, dev_ext_zig, ext_zig)) {
+                continue :outer;
+            }
+        }
+
+        std.log.err("Device extension not supported {s}", .{ext});
+        return error.DeviceExtensionNotSupported;
+    }
+}
+
 const VkPhysicalDevice = struct {
     device: c.VkPhysicalDevice,
     properties: c.VkPhysicalDeviceProperties,
@@ -22,24 +386,6 @@ const VkDevice = struct {
     queue: VkQueue,
 };
 const SwapchainImage = struct {
-    image: c.VkImage,
-    view: c.VkImageView,
-};
-
-pub const TextureFormat = enum {
-    rgba_8,
-};
-
-pub const TextureFlags = packed struct {};
-
-pub const Texture = struct {
-    pub const CreateInfo = struct {
-        width: usize,
-        height: usize,
-        format: TextureFormat,
-        initial_bytes: ?[]const u8,
-        flags: TextureFlags = .{},
-    };
     image: c.VkImage,
     view: c.VkImageView,
 };
@@ -331,312 +677,90 @@ const RenderState = struct {
     }
 };
 
-pub const Renderer = struct {
-    const FRAMES_IN_FLIGHT = 3;
+const Textures = std.ArrayList(Texture);
+const TextureAllocator = struct {
+    const num_descriptors: u32 = 16536;
+    const bindless_textures_binding: u32 = 0;
 
-    instance: c.VkInstance,
-    debug_utils: ?DebugUtilsMessengerExt,
+    all_textures: Textures,
+
+    bindless_descriptor_set: c.VkDescriptorSet,
+    bindless_descriptor_set_layout: c.VkDescriptorSetLayout,
+    bindless_descriptor_pool: c.VkDescriptorPool,
+
     allocator: Allocator,
     vk_allocator: c.VmaAllocator,
 
-    surface: c.VkSurfaceKHR,
-    physical_device: VkPhysicalDevice,
-    device: VkDevice,
+    fn init(device: VkDevice, allocator: Allocator, vma: c.VmaAllocator) !TextureAllocator {
+        var layout: c.VkDescriptorSetLayout = undefined;
+        const bindings = [_]c.VkDescriptorSetLayoutBinding{c.VkDescriptorSetLayoutBinding{
+            .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = num_descriptors,
+            .binding = bindless_textures_binding,
+            .stageFlags = c.VK_SHADER_STAGE_ALL,
+            .pImmutableSamplers = null,
+        }};
 
-    swapchain: Swapchain,
+        const bindless_flags: u32 = @intCast(c.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | c.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT);
+        const bindless_info = c.VkDescriptorSetLayoutBindingFlagsCreateInfoEXT{ .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO, .pNext = null, .bindingCount = 1, .pBindingFlags = &bindless_flags };
 
-    render_states: []RenderState,
-    render_list: RenderList,
+        const info = c.VkDescriptorSetLayoutCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = &bindless_info,
+            .flags = c.VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+            .pBindings = &bindings,
+            .bindingCount = @intCast(bindings.len),
+        };
 
-    current_render_state: usize = 0,
+        vk_check(c.vkCreateDescriptorSetLayout(device.handle, &info, null, &layout), "Failed to create vk descriptor set layout");
 
-    pub fn init(window: *Window, allocator: Allocator) !Renderer {
-        const instance = try create_vulkan_instance(window.window, allocator);
-        errdefer c.vkDestroyInstance(instance, null);
+        const pool_sizes = [_]c.VkDescriptorPoolSize{c.VkDescriptorPoolSize{
+            .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = num_descriptors,
+        }};
+        const pool_info = c.VkDescriptorPoolCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .flags = c.VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
+            .maxSets = 4,
+            .poolSizeCount = @intCast(pool_sizes.len),
+            .pPoolSizes = &pool_sizes,
+        };
+        var descriptor_pool: c.VkDescriptorPool = undefined;
+        vk_check(c.vkCreateDescriptorPool(device.handle, &pool_info, null, &descriptor_pool), "Failed to create bindless descriptor pool");
 
-        const debug_utils = DebugUtilsMessengerExt.init(instance);
-
-        const surface = create_vulkan_surface(window.window, instance);
-        errdefer c.vkDestroySurfaceKHR(instance, surface, null);
-
-        const physical_device = try select_physical_device(instance, allocator);
-        const device = try init_logical_device(physical_device, surface, allocator);
-        errdefer c.vkDestroyDevice(device.handle, null);
-
-        var swapchain = Swapchain{};
-        try swapchain.init(instance, physical_device.device, device.handle, surface, device.queue.handle, device.queue.qfi, allocator);
-
-        std.log.info("Picked device {s}\n", .{physical_device.properties.deviceName});
-
-        var vk_allocator: c.VmaAllocator = undefined;
-
-        vk_check(c.vmaCreateAllocator(&c.VmaAllocatorCreateInfo{
-            .flags = 0,
-            .device = device.handle,
-            .instance = instance,
-            .physicalDevice = physical_device.device,
-        }, &vk_allocator), "Failed to create vma allocator");
-
-        var render_states = try allocator.alloc(RenderState, Renderer.FRAMES_IN_FLIGHT);
-        errdefer allocator.free(render_states);
-
-        for (0..Renderer.FRAMES_IN_FLIGHT) |i| {
-            render_states[i] = try RenderState.init(device);
-        }
+        const max_bindings = num_descriptors - 1;
+        const bindless_set_info = c.VkDescriptorSetVariableDescriptorCountAllocateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorSetCount = 1,
+            .pDescriptorCounts = &max_bindings,
+        };
+        const alloc_info = c.VkDescriptorSetAllocateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = &bindless_set_info,
+            .descriptorSetCount = 1,
+            .descriptorPool = descriptor_pool,
+            .pSetLayouts = &layout,
+        };
+        var descriptor_set: c.VkDescriptorSet = null;
+        vk_check(c.vkAllocateDescriptorSets(device.handle, &alloc_info, &descriptor_set), "Failed to allocate bindless descriptor set");
 
         return .{
-            .instance = instance,
+            .all_textures = Textures.init(allocator),
+            .bindless_descriptor_set = descriptor_set,
+            .bindless_descriptor_set_layout = layout,
+            .bindless_descriptor_pool = descriptor_pool,
+
             .allocator = allocator,
-            .vk_allocator = vk_allocator,
-
-            .debug_utils = debug_utils,
-            .surface = surface,
-            .physical_device = physical_device,
-            .device = device,
-            .swapchain = swapchain,
-
-            .render_list = RenderList.init(allocator),
-            .render_states = render_states,
+            .vk_allocator = vma,
         };
     }
 
-    pub fn deinit(this: *Renderer) void {
-        vk_check(c.vkDeviceWaitIdle(this.device.handle), "Failed to wait for device idle in uninit");
-        for (0..Renderer.FRAMES_IN_FLIGHT) |i| {
-            this.render_states[i].deinit(this.device);
-        }
-
-        this.render_list.deinit();
-
-        c.vmaDestroyAllocator(this.vk_allocator);
-        this.swapchain.deinit(this.device.handle, this.allocator);
-        c.vkDestroyDevice(this.device.handle, null);
-        c.vkDestroySurfaceKHR(this.instance, this.surface, null);
-
-        if (this.debug_utils) |*utils| {
-            utils.deinit(this.instance);
-        }
-
-        c.vkDestroyInstance(this.instance, null);
-    }
-
-    pub fn start_rendering(this: *Renderer) !void {
-        var render_state = &this.render_states[this.current_render_state];
-        render_state.start_frame(this.device);
-        this.render_list.clear();
-        try this.swapchain.acquire_next_image(this.device);
-    }
-
-    pub fn render(this: *Renderer) !void {
-        var render_state = &this.render_states[this.current_render_state];
-
-        const current_img_view = this.swapchain.images[this.swapchain.current_image].view;
-        const rendering_info = c.VkRenderingInfo{
-            .sType = c.VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .renderArea = c.VkRect2D{
-                .offset = .{},
-                .extent = this.swapchain.extents,
-            },
-            .pColorAttachments = &[1]c.VkRenderingAttachmentInfo{c.VkRenderingAttachmentInfo{ .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE, .imageView = current_img_view, .imageLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, .clearValue = c.VkClearValue{ .color = c.VkClearColorValue{
-                .uint32 = [4]u32{ 0, 0, 0, 0 },
-            } } }},
-            .colorAttachmentCount = 1,
-            .layerCount = 1,
-            .pDepthAttachment = null,
-        };
-        c.vkCmdBeginRendering(render_state.main_command_buffer, &rendering_info);
-
-        // Do something
-
-        c.vkCmdEndRendering(render_state.main_command_buffer);
-
-        render_state.end_frame(this.device);
-        try this.swapchain.present(this.device);
-        this.current_render_state = (this.current_render_state + 1) % Renderer.FRAMES_IN_FLIGHT;
-    }
-
-    fn create_vulkan_instance(window: *c.SDL_Window, allocator: Allocator) !c.VkInstance {
-        const app_info = c.VkApplicationInfo{
-            .pApplicationName = "EngineApplication",
-            .pEngineName = "Engine",
-            .apiVersion = c.VK_API_VERSION_1_3,
-            .engineVersion = c.VK_MAKE_VERSION(0, 0, 0),
-            .applicationVersion = c.VK_MAKE_VERSION(0, 0, 0),
-        };
-        var ext_counts: c_uint = 0;
-        if (c.SDL_Vulkan_GetInstanceExtensions(window, &ext_counts, null) != c.SDL_TRUE) {
-            sdl_util.sdl_panic();
-        }
-
-        var exts = std.ArrayList([*c]const u8).init(allocator);
-        defer exts.deinit();
-        _ = try exts.addManyAsSlice(ext_counts);
-        try exts.append("VK_EXT_debug_utils");
-
-        if (c.SDL_Vulkan_GetInstanceExtensions(window, &ext_counts, exts.items.ptr) != c.SDL_TRUE) {
-            sdl_util.sdl_panic();
-        }
-
-        const required_layers: [*]const [*:0]const u8 = &.{"VK_LAYER_KHRONOS_validation"};
-
-        var instance: c.VkInstance = undefined;
-        vk_check(c.vkCreateInstance(&.{
-            .sType = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-            .pApplicationInfo = &app_info,
-            .enabledExtensionCount = @intCast(exts.items.len),
-            .ppEnabledExtensionNames = exts.items.ptr,
-            .enabledLayerCount = 1,
-            .ppEnabledLayerNames = required_layers,
-        }, null, &instance), "Failed to create instance");
-
-        return instance;
-    }
-
-    fn create_vulkan_surface(window: *c.SDL_Window, instance: c.VkInstance) c.VkSurfaceKHR {
-        var surface: c.VkSurfaceKHR = undefined;
-        if (c.SDL_Vulkan_CreateSurface(window, instance, &surface) != c.SDL_TRUE) {
-            sdl_util.sdl_panic();
-        }
-        return surface;
-    }
-
-    fn select_physical_device(instance: c.VkInstance, allocator: Allocator) !VkPhysicalDevice {
-        const funcs = struct {
-            const SortContext = struct {
-                instance: c.VkInstance,
-            };
-
-            fn device_ty_priority(device_type: c.VkPhysicalDeviceType) usize {
-                return switch (device_type) {
-                    c.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU => 3,
-                    c.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU => 2,
-                    c.VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU => 1,
-                    else => 0,
-                };
-            }
-            fn sort_physical_devices(context: SortContext, a: c.VkPhysicalDevice, b: c.VkPhysicalDevice) bool {
-                _ = context;
-                var props_a: c.VkPhysicalDeviceProperties = undefined;
-                var props_b: c.VkPhysicalDeviceProperties = undefined;
-                c.vkGetPhysicalDeviceProperties(a, &props_a);
-                c.vkGetPhysicalDeviceProperties(b, &props_b);
-                const device_ty_a = device_ty_priority(props_a.deviceType);
-                const device_ty_b = device_ty_priority(props_b.deviceType);
-
-                return device_ty_a > device_ty_b;
-            }
-        };
-        var pdevice_count: u32 = undefined;
-        vk_check(c.vkEnumeratePhysicalDevices(instance, &pdevice_count, null), "Failed to enumerate devices");
-        const devices = try allocator.alloc(c.VkPhysicalDevice, pdevice_count);
-        defer allocator.free(devices);
-
-        vk_check(c.vkEnumeratePhysicalDevices(instance, &pdevice_count, devices.ptr), "Failed to get physical devices");
-
-        std.mem.sort(c.VkPhysicalDevice, devices, funcs.SortContext{ .instance = instance }, funcs.sort_physical_devices);
-
-        std.log.debug("{d} candidate devices", .{pdevice_count});
-
-        for (devices, 0..) |device, idx| {
-            var properties: c.VkPhysicalDeviceProperties = undefined;
-            c.vkGetPhysicalDeviceProperties(device, &properties);
-            std.log.debug("\t{d}) Device {s}", .{ idx, properties.deviceName });
-        }
-
-        for (devices) |device| {
-            var properties: c.VkPhysicalDeviceProperties = undefined;
-            c.vkGetPhysicalDeviceProperties(device, &properties);
-            if (properties.deviceType != c.VK_PHYSICAL_DEVICE_TYPE_CPU) {
-                var device_mem: c.VkPhysicalDeviceMemoryProperties = undefined;
-                c.vkGetPhysicalDeviceMemoryProperties(device, &device_mem);
-
-                return .{
-                    .device = device,
-                    .properties = properties,
-                    .device_memory = device_mem,
-                };
-            }
-        }
-        vulkan_init_failure("Failed to pick valid device");
-    }
-
-    fn init_logical_device(
-        physical_device: VkPhysicalDevice,
-        surface: c.VkSurfaceKHR,
-        allocator: Allocator,
-    ) !VkDevice {
-        var props_count: u32 = undefined;
-        c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device.device, &props_count, null);
-        const props = try allocator.alloc(c.VkQueueFamilyProperties, props_count);
-        defer allocator.free(props);
-        c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device.device, &props_count, props.ptr);
-
-        try ensure_device_extensions_are_available(physical_device, allocator);
-
-        var graphics_qfi: ?u32 = null;
-        for (props, 0..) |prop, idx| {
-            var supported: u32 = c.VK_FALSE;
-            if (prop.queueFlags & c.VK_QUEUE_GRAPHICS_BIT > 0 and c.vkGetPhysicalDeviceSurfaceSupportKHR(physical_device.device, @intCast(idx), surface, &supported) == c.VK_SUCCESS and supported == c.VK_TRUE) {
-                graphics_qfi = @intCast(idx);
-            }
-        }
-
-        if (graphics_qfi == null) {
-            vulkan_init_failure("Failed to pick a vulkan graphics queue");
-        }
-
-        const prios: [1]f32 = .{1.0};
-
-        const queue_create_info: [1]c.VkDeviceQueueCreateInfo = .{
-            c.VkDeviceQueueCreateInfo{
-                .sType = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                .queueCount = 1,
-                .queueFamilyIndex = graphics_qfi.?,
-                .pQueuePriorities = &prios,
-            },
-        };
-
-        var features13 = c.VkPhysicalDeviceVulkan13Features{
-            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-            .synchronization2 = c.VK_TRUE,
-            .dynamicRendering = c.VK_TRUE,
-        };
-        const device_create_info = c.VkDeviceCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &features13, .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_create_info, .enabledExtensionCount = @intCast(required_device_extensions.len), .ppEnabledExtensionNames = &required_device_extensions };
-
-        var device: c.VkDevice = undefined;
-        vk_check(c.vkCreateDevice(physical_device.device, &device_create_info, null, &device), "Failed to create device");
-
-        var queue: c.VkQueue = undefined;
-        c.vkGetDeviceQueue(device, graphics_qfi.?, 0, &queue);
-
-        return .{
-            .handle = device,
-            .queue = VkQueue{ .handle = queue, .qfi = graphics_qfi.? },
-        };
+    fn deinit(this: *TextureAllocator, device: VkDevice) void {
+        c.vkDestroyDescriptorSetLayout(device.handle, this.bindless_descriptor_set_layout, null);
+        c.vkDestroyDescriptorPool(device.handle, this.bindless_descriptor_pool, null);
     }
 };
-
-fn ensure_device_extensions_are_available(device: VkPhysicalDevice, allocator: Allocator) !void {
-    var supported_extension_count: u32 = undefined;
-    vk_check(c.vkEnumerateDeviceExtensionProperties(device.device, null, &supported_extension_count, null), "Failed to enumerate supported device extensions");
-    const extensions = try allocator.alloc(c.VkExtensionProperties, supported_extension_count);
-    vk_check(c.vkEnumerateDeviceExtensionProperties(device.device, null, &supported_extension_count, extensions.ptr), "Failed to get supported extensions");
-
-    outer: for (required_device_extensions) |ext| {
-        std.log.debug("Checking extension {s}", .{ext});
-        const ext_zig = std.mem.span(ext);
-        for (extensions) |dev_ext| {
-            const dev_ext_zig_len = std.mem.len(@as([*:0]u8, @ptrCast(@constCast(&dev_ext.extensionName))));
-            const dev_ext_zig = dev_ext.extensionName[0..dev_ext_zig_len];
-            if (std.mem.eql(u8, dev_ext_zig, ext_zig)) {
-                continue :outer;
-            }
-        }
-
-        std.log.err("Device extension not supported {s}", .{ext});
-        return error.DeviceExtensionNotSupported;
-    }
-}
 
 fn message_callback(
     message_severity: c.VkDebugUtilsMessageSeverityFlagsEXT,
