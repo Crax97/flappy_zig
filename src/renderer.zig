@@ -4,7 +4,7 @@ const c = @import("clibs.zig");
 const Window = @import("window.zig").Window;
 const Allocator = std.mem.Allocator;
 
-const required_device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
+const required_device_extensions = [_][*:0]const u8{ "VK_KHR_swapchain", "VK_KHR_dynamic_rendering" };
 
 const VkPhysicalDevice = struct {
     device: c.VkPhysicalDevice,
@@ -472,6 +472,8 @@ pub const Renderer = struct {
         defer allocator.free(props);
         c.vkGetPhysicalDeviceQueueFamilyProperties(physical_device.device, &props_count, props.ptr);
 
+        try ensure_device_extensions_are_available(physical_device, allocator);
+
         var graphics_qfi: ?u32 = null;
         for (props, 0..) |prop, idx| {
             var supported: u32 = c.VK_FALSE;
@@ -515,6 +517,28 @@ pub const Renderer = struct {
         };
     }
 };
+
+fn ensure_device_extensions_are_available(device: VkPhysicalDevice, allocator: Allocator) !void {
+    var supported_extension_count: u32 = undefined;
+    vk_check(c.vkEnumerateDeviceExtensionProperties(device.device, null, &supported_extension_count, null), "Failed to enumerate supported device extensions");
+    const extensions = try allocator.alloc(c.VkExtensionProperties, supported_extension_count);
+    vk_check(c.vkEnumerateDeviceExtensionProperties(device.device, null, &supported_extension_count, extensions.ptr), "Failed to get supported extensions");
+
+    outer: for (required_device_extensions) |ext| {
+        std.log.debug("Checking extension {s}", .{ext});
+        const ext_zig = std.mem.span(ext);
+        for (extensions) |dev_ext| {
+            const dev_ext_zig_len = std.mem.len(@as([*:0]u8, @ptrCast(@constCast(&dev_ext.extensionName))));
+            const dev_ext_zig = dev_ext.extensionName[0..dev_ext_zig_len];
+            if (std.mem.eql(u8, dev_ext_zig, ext_zig)) {
+                continue :outer;
+            }
+        }
+
+        std.log.err("Device extension not supported {s}", .{ext});
+        return error.DeviceExtensionNotSupported;
+    }
+}
 
 fn message_callback(
     message_severity: c.VkDebugUtilsMessageSeverityFlagsEXT,
