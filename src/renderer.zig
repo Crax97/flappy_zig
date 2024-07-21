@@ -33,6 +33,13 @@ pub const Texture = struct {
     allocation: c.VmaAllocation,
 };
 
+pub const Buffer = struct {
+    pub const CreateInfo = struct {
+        size: u64,
+        flags: BufferFlags = .{},
+    };
+};
+
 pub const TextureFormat = enum {
     rgba_8,
 };
@@ -41,6 +48,14 @@ pub const TextureFlags = packed struct {
     cpu_readable: bool = false,
     storage_image: bool = false,
     trasfer_src: bool = false,
+};
+
+pub const BufferFlags = packed struct {
+    cpu_readable: bool = false,
+    transfer_src: bool = true,
+    vertex_buffer: bool = false,
+    storage_buffer: bool = false,
+    uniform_buffer: bool = false,
 };
 
 pub const Renderer = struct {
@@ -137,6 +152,22 @@ pub const Renderer = struct {
 
     pub fn alloc_texture(this: *Renderer, description: Texture.CreateInfo) !Texture {
         const allocation = try this.texture_allocator.alloc_texture(this.device, description);
+        //        if (description.initial_bytes) |bytes| {
+        //            const texel_size_bytes = switch (description.channel_size) {
+        //                .rgba_8 => 4,
+        //            };
+        //            const total_size_needed = description.width * description.height * description.depth * texel_size_bytes;
+        //            const buffer = this.create_buffer(Buffer.CreateInfo{
+        //                .flags = .{
+        //                    .cpu_readable = true,
+        //                    .transfer_src = true,
+        //                },
+        //                .size = total_size_needed,
+        //            });
+        //
+        //
+        //
+        //        }
         return allocation.texture;
     }
 
@@ -360,6 +391,43 @@ pub const Renderer = struct {
         return .{
             .handle = device,
             .queue = VkQueue{ .handle = queue, .qfi = graphics_qfi.? },
+        };
+    }
+
+    fn create_buffer(this: *Renderer, info: Buffer.CreateInfo) !BufferAllocation {
+        var usage: u32 = c.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (info.flags.transfer_src) {
+            usage |= c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        }
+        if (info.flags.vertex_buffer) {
+            usage |= c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        }
+        if (info.flags.uniform_buffer) {
+            usage |= c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+        }
+        if (info.flags.storage_buffer) {
+            usage |= c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        }
+
+        const buffer_info = c.VkBufferCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .usage = usage,
+            .flags = 0,
+            .queueFamilyIndexCount = 1,
+            .pQueueFamilyIndices = &[_]u32{this.device.queue.qfi},
+            .size = info.size,
+        };
+
+        var buffer = std.mem.zeroes(c.VkBuffer);
+        var alloc_info = std.mem.zeroed(c.VmaAllocationCreateInfo);
+        alloc_info.usage = if (info.flags.cpu_readable) c.VMA_MEMORY_USAGE_AUTO_PREFER_HOST else c.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        var allocation: c.VmaAllocation = undefined;
+        vk_check(c.vmaCreateBuffer(this.vk_allocator, &buffer_info, &alloc_info, &buffer, &allocation, null), "Failed to create buffer");
+
+        return .{
+            .buffer = buffer,
+            .allocation = allocation,
         };
     }
 };
@@ -864,6 +932,11 @@ const TextureAllocator = struct {
         c.vkDestroyDescriptorSetLayout(device.handle, this.bindless_descriptor_set_layout, null);
         c.vkDestroyDescriptorPool(device.handle, this.bindless_descriptor_pool, null);
     }
+};
+
+const BufferAllocation = struct {
+    buffer: c.VkBuffer,
+    allocation: c.VmaAllocation,
 };
 
 fn message_callback(
