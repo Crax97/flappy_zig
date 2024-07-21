@@ -50,14 +50,24 @@ fn vk_check(expr: c.VkResult, comptime errmsg: []const u8) void {
     }
 }
 
+fn unopt(comptime T: type) type {
+    const info = @typeInfo(T);
+    if (info != .Optional) @compileError("T must be optional!");
+    return info.Optional.child;
+}
+
 fn loadFunc(instance: c.VkInstance, comptime T: type, comptime funcname: [*c]const u8) T {
     const func: T = @ptrCast(c.vkGetInstanceProcAddr(instance, funcname));
     return func;
 }
 
+fn loadFuncAssert(instance: c.VkInstance, comptime T: type, comptime funcname: [*c]const u8) unopt(T) {
+    return loadFunc(instance, T, funcname).?;
+}
+
 const DebugUtilsMessengerExt = struct {
-    create_debug_messenger: c.PFN_vkCreateDebugUtilsMessengerEXT,
-    destroy_debug_messenger: c.PFN_vkDestroyDebugUtilsMessengerEXT,
+    create_debug_messenger: unopt(c.PFN_vkCreateDebugUtilsMessengerEXT),
+    destroy_debug_messenger: unopt(c.PFN_vkDestroyDebugUtilsMessengerEXT),
     instance: c.VkDebugUtilsMessengerEXT,
 
     fn init(instance: c.VkInstance) ?DebugUtilsMessengerExt {
@@ -67,10 +77,10 @@ const DebugUtilsMessengerExt = struct {
             c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT, .messageType = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
             c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
             c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT, .pfnUserCallback = message_callback };
-        const create_debug_messenger = loadFunc(instance, c.PFN_vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT");
-        const destroy_debug_messenger = loadFunc(instance, c.PFN_vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT");
+        const create_debug_messenger = loadFuncAssert(instance, c.PFN_vkCreateDebugUtilsMessengerEXT, "vkCreateDebugUtilsMessengerEXT");
+        const destroy_debug_messenger = loadFuncAssert(instance, c.PFN_vkDestroyDebugUtilsMessengerEXT, "vkDestroyDebugUtilsMessengerEXT");
         var debug_utils_messenger: c.VkDebugUtilsMessengerEXT = undefined;
-        vk_check(create_debug_messenger.?(instance, &debug_utils, null, &debug_utils_messenger), "Failed to create debug messenger");
+        vk_check(create_debug_messenger(instance, &debug_utils, null, &debug_utils_messenger), "Failed to create debug messenger");
         return .{
             .create_debug_messenger = create_debug_messenger,
             .destroy_debug_messenger = destroy_debug_messenger,
@@ -79,7 +89,7 @@ const DebugUtilsMessengerExt = struct {
     }
 
     fn deinit(this: *DebugUtilsMessengerExt, instance: c.VkInstance) void {
-        this.destroy_debug_messenger.?(instance, this.instance, null);
+        this.destroy_debug_messenger(instance, this.instance, null);
     }
 };
 
