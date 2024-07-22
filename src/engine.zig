@@ -3,7 +3,7 @@ const SDL = @import("clibs.zig");
 const sdl_util = @import("sdl_util.zig");
 
 const window = @import("window.zig");
-const renderer = @import("renderer.zig");
+pub const renderer = @import("renderer/main.zig");
 const ecs = @import("ecs/ecs.zig");
 const World = ecs.World;
 

@@ -16,7 +16,7 @@ const FlappyGame = struct {
     bird_texture: engine.Texture = undefined,
 
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        self.bird_texture = try load_texture_from_file(engine_inst, "./bird.png");
+        self.bird_texture = try load_texture_from_file(engine_inst, "./assets/apple.png");
     }
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         _ = self;
@@ -31,12 +31,27 @@ const FlappyGame = struct {
 };
 
 fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!engine.Texture {
-    _ = path;
+    var width: c_int = undefined;
+    var height: c_int = undefined;
+    var channels: c_int = undefined;
 
-    return try inst.renderer.alloc_texture(engine.Texture.CreateInfo{ .width = 512, .height = 512, .format = .rgba_8, .initial_bytes = null });
+    const data_p = SDL.stbi_load(path.ptr, &width, &height, &channels, 4);
+    std.debug.assert(data_p != null);
+    defer SDL.stbi_image_free(data_p);
+    const data_size = width * height * channels;
+    const format = switch (channels) {
+        4 => engine.renderer.TextureFormat.rgba_8,
+        else => unreachable,
+    };
+    const data = data_p[0..@intCast(data_size)];
+
+    return try inst.renderer.alloc_texture(engine.Texture.CreateInfo{ .width = @intCast(width), .height = @intCast(height), .format = format, .initial_bytes = data });
 }
 
 pub fn main() !void {
+    const buf =
+        try std.fs.realpathAlloc(std.heap.page_allocator, ".");
+    std.debug.print("cwd {s}\n", .{buf});
     if (SDL.SDL_Init(SDL.SDL_INIT_VIDEO | SDL.SDL_INIT_JOYSTICK | SDL.SDL_INIT_GAMECONTROLLER) != 0) {
         sdl_util.sdl_panic();
     }

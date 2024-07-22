@@ -1,62 +1,21 @@
 const std = @import("std");
-const sdl_util = @import("sdl_util.zig");
-const c = @import("clibs.zig");
-const Window = @import("window.zig").Window;
+const sdl_util = @import("../sdl_util.zig");
+const sampler_allocator = @import("sampler_allocator.zig");
+const c = @import("../clibs.zig");
+const types = @import("types.zig");
+
+const Window = @import("../window.zig").Window;
 const Allocator = std.mem.Allocator;
 
+const Texture = types.Texture;
+const TextureHandle = types.TextureHandle;
+const TextureFlags = types.TextureFlags;
+const TextureFormat = types.TextureFormat;
+const Buffer = types.Buffer;
+const BufferHandle = types.BufferHandle;
+const BufferFlags = types.BufferFlags;
+
 const required_device_extensions = [_][*:0]const u8{ "VK_KHR_swapchain", "VK_KHR_dynamic_rendering" };
-
-pub fn Handle(comptime T: type) type {
-    _ = T;
-    return struct {
-        const NULL = std.math.maxInt(u32);
-        id: u32 = NULL,
-
-        fn is_null(this: @This()) bool {
-            return this.id == NULL;
-        }
-    };
-}
-
-pub const Texture = struct {
-    pub const CreateInfo = struct {
-        width: u32,
-        height: u32,
-        depth: u32 = 1,
-        format: TextureFormat,
-        initial_bytes: ?[]const u8,
-        flags: TextureFlags = .{},
-    };
-    handle: TextureHandle,
-    image: c.VkImage,
-    view: c.VkImageView,
-    allocation: c.VmaAllocation,
-};
-
-pub const Buffer = struct {
-    pub const CreateInfo = struct {
-        size: u64,
-        flags: BufferFlags = .{},
-    };
-};
-
-pub const TextureFormat = enum {
-    rgba_8,
-};
-
-pub const TextureFlags = packed struct {
-    cpu_readable: bool = false,
-    storage_image: bool = false,
-    trasfer_src: bool = false,
-};
-
-pub const BufferFlags = packed struct {
-    cpu_readable: bool = false,
-    transfer_src: bool = true,
-    vertex_buffer: bool = false,
-    storage_buffer: bool = false,
-    uniform_buffer: bool = false,
-};
 
 pub const Renderer = struct {
     const FRAMES_IN_FLIGHT = 3;
@@ -75,6 +34,7 @@ pub const Renderer = struct {
     render_states: []RenderState,
     render_list: RenderList,
     texture_allocator: TextureAllocator,
+    sampler_allocator: sampler_allocator.SamplerAllocator,
 
     current_render_state: usize = 0,
 
@@ -126,6 +86,7 @@ pub const Renderer = struct {
             .render_list = RenderList.init(allocator),
             .render_states = render_states,
             .texture_allocator = try TextureAllocator.init(device, allocator, vk_allocator),
+            .sampler_allocator = sampler_allocator.SamplerAllocator.init(allocator, device.handle),
         };
     }
 
@@ -136,6 +97,7 @@ pub const Renderer = struct {
         }
 
         this.texture_allocator.deinit(this.device);
+        this.sampler_allocator.deinit();
         this.render_list.deinit();
 
         c.vmaDestroyAllocator(this.vk_allocator);
@@ -151,23 +113,72 @@ pub const Renderer = struct {
     }
 
     pub fn alloc_texture(this: *Renderer, description: Texture.CreateInfo) !Texture {
-        const allocation = try this.texture_allocator.alloc_texture(this.device, description);
-        //        if (description.initial_bytes) |bytes| {
-        //            const texel_size_bytes = switch (description.channel_size) {
-        //                .rgba_8 => 4,
-        //            };
-        //            const total_size_needed = description.width * description.height * description.depth * texel_size_bytes;
-        //            const buffer = this.create_buffer(Buffer.CreateInfo{
-        //                .flags = .{
-        //                    .cpu_readable = true,
-        //                    .transfer_src = true,
-        //                },
-        //                .size = total_size_needed,
-        //            });
-        //
-        //
-        //
-        //        }
+        const allocation = try this.texture_allocator.alloc_texture(this.device, &this.sampler_allocator, description);
+        if (description.initial_bytes) |bytes| {
+            // TODO: implement better copying strategy
+            const texel_size_bytes = switch (description.format) {
+                .rgba_8 => 4,
+            };
+            const total_size_needed = description.width * description.height * description.depth * texel_size_bytes;
+
+            std.debug.assert(bytes.len >= total_size_needed);
+
+            const staging_buffer = try this.create_staging_buffer(total_size_needed);
+            var alloc_info = std.mem.zeroes(c.VmaAllocationInfo);
+            c.vmaGetAllocationInfo(this.vk_allocator, staging_buffer.allocation, &alloc_info);
+            const ptr: [*]u8 = @ptrCast(alloc_info.pMappedData);
+            @memcpy(ptr, bytes);
+
+            const cmd_buf = try this.allocate_oneshot_command_buffer();
+
+            quick_transition_image(cmd_buf, .{
+                .image = allocation.texture.image,
+                .subresource = c.VkImageSubresourceRange{
+                    .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseArrayLayer = 0,
+                    .baseMipLevel = 0,
+                    .layerCount = 1,
+                    .levelCount = 1,
+                },
+            }, .{}, .{
+                .layout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .access_flags = c.VK_ACCESS_2_MEMORY_WRITE_BIT,
+                .pipeline_flags = c.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            });
+
+            const regions = &[_]c.VkBufferImageCopy{c.VkBufferImageCopy{
+                .imageSubresource = c.VkImageSubresourceLayers{
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                    .mipLevel = 0,
+                    .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                },
+                .imageExtent = c.VkExtent3D{ .width = description.width, .height = description.height, .depth = description.depth },
+            }};
+            c.vkCmdCopyBufferToImage(cmd_buf, staging_buffer.buffer, allocation.texture.image, c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, regions);
+
+            quick_transition_image(cmd_buf, .{
+                .image = allocation.texture.image,
+                .subresource = c.VkImageSubresourceRange{
+                    .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseArrayLayer = 0,
+                    .baseMipLevel = 0,
+                    .layerCount = 1,
+                    .levelCount = 1,
+                },
+            }, .{
+                .layout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .access_flags = c.VK_ACCESS_2_MEMORY_WRITE_BIT,
+                .pipeline_flags = c.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            }, .{
+                .layout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .access_flags = c.VK_ACCESS_2_SHADER_READ_BIT,
+                .pipeline_flags = c.VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+            });
+
+            this.submit_oneshot_command_buffer(true, cmd_buf);
+            c.vmaDestroyBuffer(this.vk_allocator, staging_buffer.buffer, staging_buffer.allocation);
+        }
         return allocation.texture;
     }
 
@@ -184,6 +195,8 @@ pub const Renderer = struct {
 
     pub fn render(this: *Renderer) !void {
         var render_state = &this.render_states[this.current_render_state];
+
+        try this.texture_allocator.flush_updates(this.device);
 
         const current_img_view = this.swapchain.images[this.swapchain.current_image].view;
         const rendering_info = c.VkRenderingInfo{
@@ -420,8 +433,9 @@ pub const Renderer = struct {
         };
 
         var buffer = std.mem.zeroes(c.VkBuffer);
-        var alloc_info = std.mem.zeroed(c.VmaAllocationCreateInfo);
+        var alloc_info = std.mem.zeroes(c.VmaAllocationCreateInfo);
         alloc_info.usage = if (info.flags.cpu_readable) c.VMA_MEMORY_USAGE_AUTO_PREFER_HOST else c.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        alloc_info.flags = if (info.flags.cpu_readable) c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | c.VMA_ALLOCATION_CREATE_MAPPED_BIT else 0;
         var allocation: c.VmaAllocation = undefined;
         vk_check(c.vmaCreateBuffer(this.vk_allocator, &buffer_info, &alloc_info, &buffer, &allocation, null), "Failed to create buffer");
 
@@ -429,6 +443,85 @@ pub const Renderer = struct {
             .buffer = buffer,
             .allocation = allocation,
         };
+    }
+
+    fn allocate_oneshot_command_buffer(this: *Renderer) !c.VkCommandBuffer {
+        var cmd_buffers = [1]c.VkCommandBuffer{undefined};
+        vk_check(c.vkAllocateCommandBuffers(this.device.handle, &c.VkCommandBufferAllocateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = this.render_states[this.current_render_state].command_pool,
+            .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        }, &cmd_buffers), "Failed to allocate command buffer");
+
+        vk_check(c.vkBeginCommandBuffer(cmd_buffers[0], &c.VkCommandBufferBeginInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        }), "Failed to begin command buffer");
+        return cmd_buffers[0];
+    }
+
+    const TransitionInfo = struct {
+        layout: c.VkImageLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        pipeline_flags: c.VkPipelineStageFlags2 = 0,
+        access_flags: c.VkAccessFlags2 = 0,
+    };
+
+    const ImageWithSubresource = struct {
+        image: c.VkImage,
+        subresource: c.VkImageSubresourceRange,
+    };
+
+    fn quick_transition_image(cmd_buf: c.VkCommandBuffer, image: ImageWithSubresource, source_image_info: TransitionInfo, dest_image_info: TransitionInfo) void {
+        const image_barriers = [_]c.VkImageMemoryBarrier2{c.VkImageMemoryBarrier2{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .image = image.image,
+            .oldLayout = source_image_info.layout,
+            .srcAccessMask = source_image_info.access_flags,
+            .srcStageMask = source_image_info.pipeline_flags,
+            .newLayout = dest_image_info.layout,
+            .dstAccessMask = dest_image_info.access_flags,
+            .dstStageMask = dest_image_info.pipeline_flags,
+            .subresourceRange = image.subresource,
+        }};
+        const dep_flags = c.VK_DEPENDENCY_BY_REGION_BIT;
+        const dep_info = c.VkDependencyInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 0,
+            .memoryBarrierCount = 0,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &image_barriers,
+            .dependencyFlags = dep_flags,
+        };
+        c.vkCmdPipelineBarrier2(cmd_buf, &dep_info);
+    }
+
+    fn submit_oneshot_command_buffer(this: *Renderer, free_command_buffer: bool, cmd_buf: c.VkCommandBuffer) void {
+        vk_check(c.vkEndCommandBuffer(cmd_buf), "Failed to end command buffer");
+
+        vk_check(c.vkQueueSubmit2(this.device.queue.handle, 1, &[1]c.VkSubmitInfo2{c.VkSubmitInfo2{
+            .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            .commandBufferInfoCount = 1,
+            .pCommandBufferInfos = &[1]c.VkCommandBufferSubmitInfo{c.VkCommandBufferSubmitInfo{
+                .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+                .commandBuffer = cmd_buf,
+                .deviceMask = 0,
+            }},
+            .pWaitSemaphoreInfos = null,
+            .pSignalSemaphoreInfos = null,
+        }}, null), "Failed to submit cbuffer");
+
+        if (free_command_buffer) {
+            vk_check(c.vkDeviceWaitIdle(this.device.handle), "Failed to wait device idle");
+            c.vkFreeCommandBuffers(this.device.handle, this.render_states[this.current_render_state].command_pool, 1, &[_]c.VkCommandBuffer{cmd_buf});
+        }
+    }
+
+    fn create_staging_buffer(this: *Renderer, size: u64) !BufferAllocation {
+        return this.create_buffer(.{ .size = size, .flags = BufferFlags{
+            .cpu_readable = true,
+            .transfer_src = true,
+        } });
     }
 };
 
@@ -474,7 +567,7 @@ const SwapchainImage = struct {
     view: c.VkImageView,
 };
 
-fn vk_check(expr: c.VkResult, comptime errmsg: []const u8) void {
+pub fn vk_check(expr: c.VkResult, comptime errmsg: []const u8) void {
     if (expr != c.VK_SUCCESS) {
         vulkan_init_failure(errmsg);
     }
@@ -761,7 +854,6 @@ const RenderState = struct {
     }
 };
 
-const TextureHandle = Handle(Texture);
 const Textures = std.ArrayList(?Texture);
 const TextureAllocation = struct { texture: Texture, handle: TextureHandle };
 
@@ -775,9 +867,12 @@ const TextureAllocator = struct {
     bindless_descriptor_set_layout: c.VkDescriptorSetLayout,
     bindless_descriptor_pool: c.VkDescriptorPool,
 
+    nearest_sampler: c.VkSampler,
+
     allocator: Allocator,
     vk_allocator: c.VmaAllocator,
     unused_handles: std.ArrayList(TextureHandle),
+    updates: std.ArrayList(BindlessSetUpdate),
 
     fn init(device: VkDevice, allocator: Allocator, vma: c.VmaAllocator) !TextureAllocator {
         var layout: c.VkDescriptorSetLayout = undefined;
@@ -833,6 +928,20 @@ const TextureAllocator = struct {
         var descriptor_set: c.VkDescriptorSet = null;
         vk_check(c.vkAllocateDescriptorSets(device.handle, &alloc_info, &descriptor_set), "Failed to allocate bindless descriptor set");
 
+        var nearest_sampler: c.VkSampler = undefined;
+        const sampler_create = c.VkSamplerCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = null,
+            .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .magFilter = c.VK_FILTER_NEAREST,
+            .minFilter = c.VK_FILTER_NEAREST,
+            .maxLod = std.math.floatMax(f32),
+            .mipmapMode = c.VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        };
+        vk_check(c.vkCreateSampler(device.handle, &sampler_create, null, &nearest_sampler), "Failed to create nearest sampler");
+
         return .{
             .all_textures = Textures.init(allocator),
             .bindless_descriptor_set = descriptor_set,
@@ -842,12 +951,17 @@ const TextureAllocator = struct {
             .allocator = allocator,
             .vk_allocator = vma,
             .unused_handles = std.ArrayList(TextureHandle).init(allocator),
+            .updates = std.ArrayList(BindlessSetUpdate).init(allocator),
+            .nearest_sampler = nearest_sampler,
         };
     }
 
-    fn alloc_texture(this: *TextureAllocator, device: VkDevice, description: Texture.CreateInfo) !TextureAllocation {
+    fn alloc_texture(this: *TextureAllocator, device: VkDevice, sam_allocator: *sampler_allocator.SamplerAllocator, description: Texture.CreateInfo) !TextureAllocation {
         var texture_handle: TextureHandle = undefined;
         var texture: *?Texture = undefined;
+
+        const sampler = try sam_allocator.get(description.sampler_config);
+
         if (this.unused_handles.items.len > 0) {
             texture_handle = this.unused_handles.pop();
             texture = &this.all_textures.items[texture_handle.id];
@@ -900,18 +1014,57 @@ const TextureAllocator = struct {
         var image_view = std.mem.zeroes(c.VkImageView);
         vk_check(c.vkCreateImageView(device.handle, &image_view_desc, null, &image_view), "Could not create image view");
 
-        // write image view to descriptor set
-
         texture.* = Texture{
             .handle = texture_handle,
             .view = image_view,
             .image = image,
+            .sampler = sampler,
             .allocation = allocation,
         };
+
+        try this.add_write_texture_to_descriptor_set(texture.*.?, texture_handle.id);
         return TextureAllocation{
             .handle = texture_handle,
             .texture = texture.*.?,
         };
+    }
+
+    const BindlessSetUpdate = struct {
+        view: c.VkImageView,
+        sampler: c.VkSampler,
+        position_in_array: u32,
+    };
+
+    fn add_write_texture_to_descriptor_set(this: *TextureAllocator, texture: Texture, position_in_array: u32) !void {
+        try this.updates.append(BindlessSetUpdate{
+            .view = texture.view,
+            .sampler = texture.sampler,
+            .position_in_array = position_in_array,
+        });
+    }
+
+    fn flush_updates(this: *TextureAllocator, device: VkDevice) !void {
+        if (this.updates.items.len == 0) {
+            return;
+        }
+
+        const image_infos = try this.allocator.alloc(c.VkDescriptorImageInfo, this.updates.items.len);
+        const writes = try this.allocator.alloc(c.VkWriteDescriptorSet, this.updates.items.len);
+        defer this.allocator.free(image_infos);
+        defer this.allocator.free(writes);
+        defer this.updates.clearRetainingCapacity();
+
+        for (this.updates.items, 0..) |update, i| {
+            image_infos[i] = c.VkDescriptorImageInfo{
+                .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .imageView = update.view,
+                .sampler = update.sampler,
+            };
+
+            writes[i] = c.VkWriteDescriptorSet{ .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .pNext = null, .dstArrayElement = update.position_in_array, .dstSet = this.bindless_descriptor_set, .dstBinding = TextureAllocator.bindless_textures_binding, .pTexelBufferView = null, .pBufferInfo = null, .pImageInfo = &image_infos[i], .descriptorCount = 1, .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER };
+        }
+
+        c.vkUpdateDescriptorSets(device.handle, @intCast(this.updates.items.len), writes.ptr, 0, null);
     }
 
     fn free_texture(this: *TextureAllocator, device: VkDevice, tex_handle: TextureHandle) void {
@@ -929,6 +1082,7 @@ const TextureAllocator = struct {
             }
         }
 
+        c.vkDestroySampler(device.handle, this.nearest_sampler, null);
         c.vkDestroyDescriptorSetLayout(device.handle, this.bindless_descriptor_set_layout, null);
         c.vkDestroyDescriptorPool(device.handle, this.bindless_descriptor_pool, null);
     }

@@ -28,6 +28,10 @@ pub fn build(b: *std.Build) !void {
 
     const env_map = try std.process.getEnvMap(b.allocator);
 
+    // STB
+    exe.addIncludePath(.{ .cwd_relative = "thirdparty/stb" });
+    exe.addCSourceFile(.{ .file = b.path("src/stb_image.cpp") });
+
     // SDL
     exe.addIncludePath(.{ .cwd_relative = "thirdparty/sdl/include" });
     exe.linkSystemLibrary("SDL2");
