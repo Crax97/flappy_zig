@@ -56,6 +56,9 @@ pub fn build(b: *std.Build) !void {
     exe.addIncludePath(b.path("thirdparty/vma/include"));
     exe.addCSourceFile(.{ .file = b.path("src/vma.cpp") });
 
+    // Shaders
+    try build_shaders(b, exe);
+
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
     // step when running `zig build`).
@@ -97,4 +100,46 @@ pub fn build(b: *std.Build) !void {
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     test_step.dependOn(&run_unit_tests.step);
+}
+
+fn build_shaders(b: *std.Build, exe: *std.Build.Step.Compile) !void {
+    const base_rel_path = "src/renderer/shaders";
+    const out_dir = "src/spirv";
+    const iterator = try b.build_root.handle.openDir(base_rel_path, .{ .iterate = true });
+    var it = iterator.iterate();
+
+    while (try it.next()) |entry| {
+        if (entry.kind == .file) {
+            const ext = std.fs.path.extension(entry.name);
+            const full_path = try std.fs.path.join(b.allocator, &.{ base_rel_path, entry.name });
+            if (is_shader_ext_valid(ext)) {
+                std.debug.print("Compiling {s}\n", .{full_path});
+
+                add_shader(b, exe, out_dir, full_path);
+            }
+        }
+    }
+}
+
+fn is_shader_ext_valid(ext: []const u8) bool {
+    const valid_exts = [3][]const u8{ ".vert", ".frag", ".comp" };
+
+    for (valid_exts) |ve| {
+        if (std.mem.eql(u8, ve, ext)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn add_shader(b: *std.Build, exe: *std.Build.Step.Compile, out_dir: []const u8, full_path: []const u8) void {
+    const name = std.fs.path.basename(full_path);
+    const outpath = std.fmt.allocPrint(b.allocator, "{s}/{s}.spv", .{ out_dir, name }) catch @panic("OOM");
+
+    const shader_compilation = b.addSystemCommand(&.{"glslangValidator"});
+    shader_compilation.addArg("-V");
+    shader_compilation.addArg("-o");
+    shader_compilation.addArg(outpath);
+    shader_compilation.addArg(full_path);
+    exe.step.dependOn(&shader_compilation.step);
 }

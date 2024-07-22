@@ -1,4 +1,5 @@
 const std = @import("std");
+const math = @import("../math/main.zig");
 const sdl_util = @import("../sdl_util.zig");
 const sampler_allocator = @import("sampler_allocator.zig");
 const c = @import("../clibs.zig");
@@ -15,10 +16,20 @@ const Buffer = types.Buffer;
 const BufferHandle = types.BufferHandle;
 const BufferFlags = types.BufferFlags;
 
+const vec2 = math.vec2;
+const rect2 = math.rect2;
+
+const shaders = struct {
+    const DEFAULT_TEXTURE_VS = @embedFile("../spirv/default_textures.vert.spv");
+    const DEFAULT_TEXTURE_FS = @embedFile("../spirv/default_fragment.frag.spv");
+};
+
 const required_device_extensions = [_][*:0]const u8{ "VK_KHR_swapchain", "VK_KHR_dynamic_rendering" };
 
 pub const Renderer = struct {
     const FRAMES_IN_FLIGHT = 3;
+    const default_color_format = c.VK_FORMAT_R8G8B8A8_UNORM;
+    const default_depth_format = c.VK_FORMAT_D32_SFLOAT;
 
     instance: c.VkInstance,
     debug_utils: ?DebugUtilsMessengerExt,
@@ -35,6 +46,9 @@ pub const Renderer = struct {
     render_list: RenderList,
     texture_allocator: TextureAllocator,
     sampler_allocator: sampler_allocator.SamplerAllocator,
+
+    default_texture_pipeline_layout: c.VkPipelineLayout,
+    default_texture_pipeline: c.VkPipeline,
 
     current_render_state: usize = 0,
 
@@ -72,6 +86,10 @@ pub const Renderer = struct {
             render_states[i] = try RenderState.init(device);
         }
 
+        const texture_allocator = try TextureAllocator.init(device, allocator, vk_allocator);
+
+        const pipeline_layout = create_pipeline_layout(device, &texture_allocator);
+
         return .{
             .instance = instance,
             .allocator = allocator,
@@ -85,8 +103,11 @@ pub const Renderer = struct {
 
             .render_list = RenderList.init(allocator),
             .render_states = render_states,
-            .texture_allocator = try TextureAllocator.init(device, allocator, vk_allocator),
+            .texture_allocator = texture_allocator,
             .sampler_allocator = sampler_allocator.SamplerAllocator.init(allocator, device.handle),
+
+            .default_texture_pipeline_layout = pipeline_layout,
+            .default_texture_pipeline = try create_default_texture_graphics_pipeline(device, pipeline_layout),
         };
     }
 
@@ -95,6 +116,9 @@ pub const Renderer = struct {
         for (0..Renderer.FRAMES_IN_FLIGHT) |i| {
             this.render_states[i].deinit(this.device);
         }
+
+        c.vkDestroyPipeline(this.device.handle, this.default_texture_pipeline, null);
+        c.vkDestroyPipelineLayout(this.device.handle, this.default_texture_pipeline_layout, null);
 
         this.texture_allocator.deinit(this.device);
         this.sampler_allocator.deinit();
@@ -192,6 +216,8 @@ pub const Renderer = struct {
         this.render_list.clear();
         try this.swapchain.acquire_next_image(this.device);
     }
+
+    // pub fn render_texture(this: *Renderer, texture: TextureHandle, texture_settings: TextureRenderSettings) !void {}
 
     pub fn render(this: *Renderer) !void {
         var render_state = &this.render_states[this.current_render_state];
@@ -523,6 +549,176 @@ pub const Renderer = struct {
             .transfer_src = true,
         } });
     }
+
+    fn create_pipeline_layout(device: VkDevice, tex_allocator: *const TextureAllocator) c.VkPipelineLayout {
+        const push_constant_range = c.VkPushConstantRange{
+            .offset = 0,
+            .size = @intCast(@sizeOf(TextureDrawInfo.PushConstantData)),
+            .stageFlags = c.VK_SHADER_STAGE_ALL,
+        };
+        const create_info = c.VkPipelineLayoutCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .setLayoutCount = 1,
+            .pSetLayouts = &[_]c.VkDescriptorSetLayout{tex_allocator.bindless_descriptor_set_layout},
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &[_]c.VkPushConstantRange{push_constant_range},
+        };
+
+        var layout: c.VkPipelineLayout = null;
+        vk_check(c.vkCreatePipelineLayout(device.handle, &create_info, null, &layout), "Failed to create descriptor layout");
+        return layout;
+    }
+
+    fn create_default_texture_graphics_pipeline(device: VkDevice, pipeline_layout: c.VkPipelineLayout) !c.VkPipeline {
+        const dynamic_info = c.VkPipelineRenderingCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .pNext = null,
+            .colorAttachmentCount = 1,
+            .depthAttachmentFormat = Renderer.default_depth_format,
+            .pColorAttachmentFormats = &[1]c.VkFormat{Renderer.default_color_format},
+            .stencilAttachmentFormat = 0,
+            .viewMask = 0,
+        };
+        var vertex_module: c.VkShaderModule = undefined;
+        var fragment_module: c.VkShaderModule = undefined;
+
+        // zig fmt: off
+        const vert_module_create_info: c.VkShaderModuleCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .codeSize = shaders.DEFAULT_TEXTURE_VS.len,
+            .pCode = @ptrCast(@alignCast(shaders.DEFAULT_TEXTURE_VS.ptr)),
+            .flags = 0
+        };
+        const frag_module_create_info: c.VkShaderModuleCreateInfo = .{
+            .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .codeSize = shaders.DEFAULT_TEXTURE_FS.len,
+            .pCode = @ptrCast(@alignCast(shaders.DEFAULT_TEXTURE_FS.ptr)),
+            .flags = 0
+        };
+        // zig fmt: on
+
+        vk_check(c.vkCreateShaderModule(device.handle, &vert_module_create_info, null, &vertex_module), "Failed to create vertex module");
+        vk_check(c.vkCreateShaderModule(device.handle, &frag_module_create_info, null, &fragment_module), "Failed to create vertex module");
+        defer c.vkDestroyShaderModule(device.handle, vertex_module, null);
+        defer c.vkDestroyShaderModule(device.handle, fragment_module, null);
+
+        const stages: [2]c.VkPipelineShaderStageCreateInfo = .{
+            c.VkPipelineShaderStageCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .module = vertex_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+                .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+            },
+            c.VkPipelineShaderStageCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .module = fragment_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+                .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+            },
+        };
+
+        const dynamic_states: [2]c.VkDynamicState = .{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
+
+        // zig fmt: off
+        const info = c.VkGraphicsPipelineCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &dynamic_info,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &stages,
+            .pVertexInputState = &c.VkPipelineVertexInputStateCreateInfo {
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                .pNext = null,
+                .vertexBindingDescriptionCount = 0,
+                .vertexAttributeDescriptionCount = 0,
+            },
+            .pInputAssemblyState = &c.VkPipelineInputAssemblyStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                .pNext = null,
+                .primitiveRestartEnable = c.VK_FALSE,
+                .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+            },
+            .pTessellationState = null,
+            .pViewportState = &c.VkPipelineViewportStateCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .pNext = null, .viewportCount = 1, .scissorCount = 1, .pScissors = null, .pViewports = null },
+            .pRasterizationState = &c.VkPipelineRasterizationStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .pNext = null,
+                .depthBiasEnable = c.VK_FALSE,
+                .rasterizerDiscardEnable = c.VK_FALSE,
+                .polygonMode = c.VK_POLYGON_MODE_FILL,
+                .cullMode = c.VK_CULL_MODE_NONE,
+                .frontFace = c.VK_FRONT_FACE_CLOCKWISE,
+                .depthClampEnable = c.VK_FALSE,
+                .lineWidth = 1.0,
+            },
+            .pMultisampleState = &c.VkPipelineMultisampleStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                .pNext = null,
+                .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+                .sampleShadingEnable = c.VK_FALSE,
+                .minSampleShading = 0.0,
+                .pSampleMask = null,
+                .alphaToCoverageEnable = c.VK_FALSE,
+                .alphaToOneEnable = c.VK_FALSE,
+            },
+            .pDepthStencilState = &c.VkPipelineDepthStencilStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                .pNext = null,
+                .depthTestEnable = c.VK_TRUE,
+                .depthWriteEnable = c.VK_TRUE,
+                .depthCompareOp = c.VK_COMPARE_OP_LESS,
+                .depthBoundsTestEnable = c.VK_FALSE,
+                .stencilTestEnable = c.VK_FALSE,
+                .front = std.mem.zeroes(c.VkStencilOpState),
+                .back = std.mem.zeroes(c.VkStencilOpState),
+                .minDepthBounds = 0.0,
+                .maxDepthBounds = 1.0,
+            },
+            .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{ 
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, 
+                .pNext = null, 
+                .flags = 0, 
+                .logicOpEnable = c.VK_FALSE,
+                .logicOp = c.VK_LOGIC_OP_NO_OP,
+                .attachmentCount = 1,
+                .pAttachments = &[1]c.VkPipelineColorBlendAttachmentState{ .{
+                    .blendEnable = c.VK_TRUE,
+                    .srcColorBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                    .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                    .colorBlendOp = c.VK_BLEND_OP_ADD,
+                    .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                    .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                    .alphaBlendOp = c.VK_BLEND_OP_ADD,
+                    }
+                }
+            },
+            .pDynamicState = &c.VkPipelineDynamicStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                .pNext = null,
+                .dynamicStateCount = @intCast(dynamic_states.len),
+                .pDynamicStates = &dynamic_states,
+            },
+            .layout = pipeline_layout,
+            .renderPass = null,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = 0,
+        };
+        
+        // zig fmt: on
+        const infos: [1]c.VkGraphicsPipelineCreateInfo = .{info};
+        var pipelines: [1]c.VkPipeline = [1]c.VkPipeline{undefined};
+
+        vk_check(c.vkCreateGraphicsPipelines(device.handle, null, 1, &infos, null, &pipelines), "Failed to create default graphics pipeline");
+        return pipelines[0];
+    }
 };
 
 fn ensure_device_extensions_are_available(device: VkPhysicalDevice, allocator: Allocator) !void {
@@ -788,8 +984,37 @@ const Swapchain = struct {
     }
 };
 
-const TextureDrawInfo = struct {
-    texture: Texture,
+pub const TextureDrawInfo = struct {
+    const GpuData = struct {
+        position_scale: [4]f32,
+        offset_extent_px: [4]f32,
+        rotation: f32,
+
+        fn from(info: TextureDrawInfo) GpuData {
+            const arr_pos = info.position.data;
+            const arr_scale = info.rotation.data;
+            const arr_off = info.region.offset.data;
+            const arr_ext = info.region.extent.data;
+            // zig fmt: off
+            return .{ 
+                .position_scale = .{ arr_pos[0], arr_pos[1], arr_scale[0], arr_scale[1] },
+                .offset_extent_px = .{ arr_off[0], arr_off[1], arr_ext[0], arr_ext[1] },
+                .rotation = info.rotation,
+
+            };
+            // zig fmt: on
+        }
+    };
+
+    const PushConstantData = struct {
+        tex_id: u32,
+    };
+
+    texture: TextureHandle,
+    position: vec2,
+    scale: vec2 = vec2.one(),
+    region: rect2,
+    rotation: f32 = 0.0,
 };
 
 const RenderTextures = std.ArrayList(TextureDrawInfo);
