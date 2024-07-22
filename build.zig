@@ -32,6 +32,12 @@ pub fn build(b: *std.Build) !void {
     exe.addIncludePath(.{ .cwd_relative = "thirdparty/sdl/include" });
     exe.linkSystemLibrary("SDL2");
 
+    if (target.result.os.tag == .windows) {
+        exe.addLibraryPath(b.path("thirdparty/sdl/x86_64-w64/bin/"));
+        exe.addLibraryPath(b.path("thirdparty/sdl/x86_64-w64/lib/"));
+        b.installBinFile("thirdparty/sdl/x86_64-w64/bin/SDL2.dll", "SDL2.dll");
+    }
+
     // Vulkan
     const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
     exe.linkSystemLibrary(
