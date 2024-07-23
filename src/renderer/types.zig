@@ -21,7 +21,7 @@ pub const Texture = struct {
         height: u32,
         depth: u32 = 1,
         format: TextureFormat,
-        initial_bytes: ?[]const u8,
+        initial_bytes: ?[]const u8 = null,
         flags: TextureFlags = .{},
 
         sampler_config: SamplerConfig = .{},
@@ -78,6 +78,7 @@ pub const TextureFlags = packed struct {
     cpu_readable: bool = false,
     storage_image: bool = false,
     trasfer_src: bool = false,
+    render_attachment: bool = false,
 };
 
 pub const BufferFlags = packed struct {
@@ -87,3 +88,9 @@ pub const BufferFlags = packed struct {
     storage_buffer: bool = false,
     uniform_buffer: bool = false,
 };
+
+pub fn vk_format(format: TextureFormat) c.VkFormat {
+    return switch (format) {
+        .rgba_8 => c.VK_FORMAT_R8G8B8A8_UNORM,
+    };
+}

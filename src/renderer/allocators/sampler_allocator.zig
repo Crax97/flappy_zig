@@ -1,10 +1,10 @@
 const std = @import("std");
-const c = @import("../clibs.zig");
-const types = @import("types.zig");
+const c = @import("../../clibs.zig");
+const types = @import("../types.zig");
 
 const SamplerConfig = types.SamplerConfig;
 const Allocator = std.mem.Allocator;
-const vk_check = @import("renderer.zig").vk_check;
+const vk_check = @import("../renderer.zig").vk_check;
 
 const Samplers = std.AutoArrayHashMap(SamplerConfig, c.VkSampler);
 pub const SamplerAllocator = struct {
