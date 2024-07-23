@@ -79,7 +79,7 @@ pub const Renderer = struct {
         var vk_allocator: c.VmaAllocator = undefined;
 
         vk_check(c.vmaCreateAllocator(&c.VmaAllocatorCreateInfo{
-            .flags = 0,
+            .flags = c.VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
             .device = device.handle,
             .instance = instance,
             .physicalDevice = physical_device.device,
@@ -143,7 +143,7 @@ pub const Renderer = struct {
         c.vkDestroyInstance(this.instance, null);
     }
 
-    pub fn alloc_texture(this: *Renderer, description: Texture.CreateInfo) !Texture {
+    pub fn alloc_texture(this: *Renderer, description: Texture.CreateInfo) !TextureHandle {
         const allocation = try this.texture_allocator.alloc_texture(this.device, &this.sampler_allocator, description);
         if (description.initial_bytes) |bytes| {
             // TODO: implement better copying strategy
@@ -210,11 +210,11 @@ pub const Renderer = struct {
             this.submit_oneshot_command_buffer(true, cmd_buf);
             c.vmaDestroyBuffer(this.vk_allocator, staging_buffer.buffer, staging_buffer.allocation);
         }
-        return allocation.texture;
+        return allocation.handle;
     }
 
-    pub fn free_texture(this: *Renderer, texture: Texture) void {
-        this.texture_allocator.free_texture(this.device, texture.handle);
+    pub fn free_texture(this: *Renderer, texture: TextureHandle) void {
+        this.texture_allocator.free_texture(this.device, texture);
     }
 
     pub fn start_rendering(this: *Renderer) !void {
@@ -224,10 +224,13 @@ pub const Renderer = struct {
         try this.swapchain.acquire_next_image(this.device);
     }
 
-    // pub fn render_texture(this: *Renderer, texture: TextureHandle, texture_settings: TextureRenderSettings) !void {}
+    pub fn draw_texture(this: *Renderer, draw_info: TextureDrawInfo) !void {
+        try this.render_list.textures.append(draw_info);
+    }
 
     pub fn render(this: *Renderer) !void {
         var render_state = &this.render_states[this.current_render_state];
+        this.update_primitive_buffers(render_state);
 
         try this.texture_allocator.flush_updates(this.device);
 
@@ -298,8 +301,9 @@ pub const Renderer = struct {
         );
 
         const dummy = TextureDrawInfo.PushConstantData{
-            .tex_id = 0,
+            .tex_buffer_address = render_state.textures_buffer_address,
         };
+
         c.vkCmdPushConstants(
             cmd_buf,
             this.default_texture_pipeline_layout,
@@ -339,10 +343,9 @@ pub const Renderer = struct {
                 },
             },
         );
-        c.vkCmdDraw(cmd_buf, 6, 1, 0, 0);
 
-        // Do something
-
+        const num_textures: u32 = @intCast(this.render_list.textures.items.len);
+        c.vkCmdDraw(cmd_buf, 6, num_textures, 0, 0);
         c.vkCmdEndRendering(cmd_buf);
 
         const final_transitions = [2]ImageTransition{
@@ -458,10 +461,20 @@ pub const Renderer = struct {
                 .pipeline_flags = c.VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT,
             },
         );
-        render_state.end_frame(this.device);
+        try render_state.end_frame(this.device);
         try this.swapchain.present(this.device);
-        try render_state.render_target_allocator.update(this.device);
         this.current_render_state = (this.current_render_state + 1) % Renderer.FRAMES_IN_FLIGHT;
+    }
+
+    fn update_primitive_buffers(this: *const Renderer, render_state: *RenderState) void {
+        var buffer_alloc_info: c.VmaAllocationInfo = undefined;
+        c.vmaGetAllocationInfo(this.vk_allocator, render_state.textures_mem_allocation, &buffer_alloc_info);
+        const data: [*]TextureDrawInfo.GpuData = @ptrCast(@alignCast(buffer_alloc_info.pMappedData.?));
+
+        for (this.render_list.textures.items, 0..) |tex, i| {
+            const gpu_info = TextureDrawInfo.GpuData.from(tex);
+            data[i] = gpu_info;
+        }
     }
 
     fn create_vulkan_instance(window: *c.SDL_Window, allocator: Allocator) !c.VkInstance {
@@ -577,7 +590,7 @@ pub const Renderer = struct {
                 };
             }
         }
-        vulkan_init_failure("Failed to pick valid device");
+        vulkan_failure("Failed to pick valid device");
     }
 
     fn init_logical_device(
@@ -602,7 +615,7 @@ pub const Renderer = struct {
         }
 
         if (graphics_qfi == null) {
-            vulkan_init_failure("Failed to pick a vulkan graphics queue");
+            vulkan_failure("Failed to pick a vulkan graphics queue");
         }
 
         const prios: [1]f32 = .{1.0};
@@ -616,10 +629,17 @@ pub const Renderer = struct {
             },
         };
 
+        var buffer_ext = c.VkPhysicalDeviceBufferDeviceAddressFeatures{
+            .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+            .pNext = null,
+            .bufferDeviceAddress = c.VK_TRUE,
+            .bufferDeviceAddressCaptureReplay = c.VK_TRUE,
+        };
+
         // Request the features necessary for bindless texturess
         var indexing_features: c.VkPhysicalDeviceDescriptorIndexingFeatures = std.mem.zeroes(c.VkPhysicalDeviceDescriptorIndexingFeatures);
         indexing_features.sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
-        indexing_features.pNext = null;
+        indexing_features.pNext = &buffer_ext;
         indexing_features.runtimeDescriptorArray = c.VK_TRUE;
         indexing_features.descriptorBindingPartiallyBound = c.VK_TRUE;
         indexing_features.descriptorBindingSampledImageUpdateAfterBind = c.VK_TRUE;
@@ -627,6 +647,7 @@ pub const Renderer = struct {
         var features_2: c.VkPhysicalDeviceFeatures2 = std.mem.zeroes(c.VkPhysicalDeviceFeatures2);
         features_2.sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features_2.pNext = &indexing_features;
+        features_2.features = .{ .shaderInt64 = c.VK_TRUE };
 
         var features13 = c.VkPhysicalDeviceVulkan13Features{
             .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -634,7 +655,15 @@ pub const Renderer = struct {
             .synchronization2 = c.VK_TRUE,
             .dynamicRendering = c.VK_TRUE,
         };
-        const device_create_info = c.VkDeviceCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &features13, .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_create_info, .enabledExtensionCount = @intCast(required_device_extensions.len), .ppEnabledExtensionNames = &required_device_extensions };
+        const device_create_info = c.VkDeviceCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+            .pNext = &features13,
+            .queueCreateInfoCount = 1,
+            .pQueueCreateInfos = &queue_create_info,
+            .enabledExtensionCount = @intCast(required_device_extensions.len),
+            .ppEnabledExtensionNames = &required_device_extensions,
+            .pEnabledFeatures = null,
+        };
 
         var device: c.VkDevice = undefined;
         vk_check(c.vkCreateDevice(physical_device.device, &device_create_info, null, &device), "Failed to create device");
@@ -1026,7 +1055,8 @@ const SwapchainImage = struct {
 
 pub fn vk_check(expr: c.VkResult, comptime errmsg: []const u8) void {
     if (expr != c.VK_SUCCESS) {
-        vulkan_init_failure(errmsg);
+        std.log.err("Vulkan error 0x{x}", .{expr});
+        vulkan_failure(errmsg);
     }
 }
 
@@ -1247,28 +1277,34 @@ const Swapchain = struct {
 
 pub const TextureDrawInfo = struct {
     const GpuData = struct {
-        position_scale: [4]f32,
-        offset_extent_px: [4]f32,
-        rotation: f32,
+        position_scale: [4]f32 align(1),
+        offset_extent_px: [4]f32 align(1),
+        rotation: f32 align(1),
+        tex_id: u32 align(1),
+        z_index: u32 align(1),
+        _pad: u32 align(1) = 0,
 
         fn from(info: TextureDrawInfo) GpuData {
             const arr_pos = info.position.data;
-            const arr_scale = info.rotation.data;
+            const arr_scale = info.scale.data;
             const arr_off = info.region.offset.data;
             const arr_ext = info.region.extent.data;
+
             // zig fmt: off
             return .{ 
                 .position_scale = .{ arr_pos[0], arr_pos[1], arr_scale[0], arr_scale[1] },
                 .offset_extent_px = .{ arr_off[0], arr_off[1], arr_ext[0], arr_ext[1] },
                 .rotation = info.rotation,
+                .tex_id = info.texture.id,
+                .z_index = info.z_index,
 
             };
             // zig fmt: on
         }
     };
 
-    const PushConstantData = struct {
-        tex_id: u32,
+    const PushConstantData = packed struct {
+        tex_buffer_address: c.VkDeviceAddress,
     };
 
     texture: TextureHandle,
@@ -1276,6 +1312,7 @@ pub const TextureDrawInfo = struct {
     scale: vec2 = vec2.one(),
     region: rect2,
     rotation: f32 = 0.0,
+    z_index: u32 = 0,
 };
 
 const TextureDrawList = std.ArrayList(TextureDrawInfo);
@@ -1304,7 +1341,19 @@ const RenderState = struct {
 
     render_target_allocator: RenderTargetAllocator,
 
-    fn init(device: VkDevice, allocator: Allocator, vk_allocator: c.VmaAllocator) !RenderState {
+    vk_allocator: c.VmaAllocator,
+
+    textures_buffer_address: c.VkDeviceAddress,
+    textures_buffer: c.VkBuffer,
+    textures_mem_allocation: c.VmaAllocation,
+
+    fn init(
+        device: VkDevice,
+        allocator: Allocator,
+        vk_allocator: c.VmaAllocator,
+    ) !RenderState {
+        const texture_buf_size: u32 = @intCast(@sizeOf(TextureDrawInfo.GpuData) * 8192 * 2);
+
         var command_pool: c.VkCommandPool = undefined;
         vk_check(c.vkCreateCommandPool(device.handle, &c.VkCommandPoolCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .pNext = null, .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = device.queue.qfi }, null, &command_pool), "Failed to create RenderState command pool");
 
@@ -1315,11 +1364,43 @@ const RenderState = struct {
 
         const render_target_allocator = RenderTargetAllocator.init(allocator, vk_allocator);
 
+        const buf_usage = c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | c.VK_BUFFER_USAGE_TRANSFER_DST_BIT | c.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+        var textures_buffer: c.VkBuffer = undefined;
+        const buf_create_info = c.VkBufferCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .pQueueFamilyIndices = &[1]u32{device.queue.qfi},
+            .queueFamilyIndexCount = 1,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+            .flags = 0,
+            .usage = buf_usage,
+            .size = texture_buf_size,
+        };
+
+        var textures_mem_allocation: c.VmaAllocation = undefined;
+        var alloc_info = std.mem.zeroes(c.VmaAllocationCreateInfo);
+        alloc_info.usage = c.VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        alloc_info.flags = c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | c.VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        alloc_info.requiredFlags = c.VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+
+        vk_check(c.vmaCreateBuffer(vk_allocator, &buf_create_info, &alloc_info, &textures_buffer, &textures_mem_allocation, null), "Failed to allocate texture data buffer");
+
+        const textures_buffer_address = c.vkGetBufferDeviceAddress(device.handle, &c.VkBufferDeviceAddressInfo{
+            .sType = c.VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .pNext = null,
+            .buffer = textures_buffer,
+        });
+
         return .{
             .command_pool = command_pool,
             .work_done_fence = try make_fence(device.handle, true),
             .main_command_buffer = command_buffer,
             .render_target_allocator = render_target_allocator,
+            .vk_allocator = vk_allocator,
+
+            .textures_buffer_address = textures_buffer_address,
+            .textures_buffer = textures_buffer,
+            .textures_mem_allocation = textures_mem_allocation,
         };
     }
 
@@ -1331,15 +1412,20 @@ const RenderState = struct {
         vk_check(c.vkBeginCommandBuffer(this.main_command_buffer, &[_]c.VkCommandBufferBeginInfo{command_buffer_begin}), "Failed to begin command buffer");
     }
 
-    fn end_frame(this: *RenderState, device: VkDevice) void {
+    fn end_frame(this: *RenderState, device: VkDevice) !void {
         vk_check(c.vkEndCommandBuffer(this.main_command_buffer), "Failed to end main command buffer");
         const cmd_buf_info = c.VkCommandBufferSubmitInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .pNext = null, .deviceMask = 0, .commandBuffer = this.main_command_buffer };
         const submit_info = c.VkSubmitInfo2{ .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2, .flags = 0, .waitSemaphoreInfoCount = 0, .pWaitSemaphoreInfos = null, .commandBufferInfoCount = 1, .pCommandBufferInfos = &[_]c.VkCommandBufferSubmitInfo{cmd_buf_info}, .signalSemaphoreInfoCount = 0, .pSignalSemaphoreInfos = null };
         vk_check(c.vkQueueSubmit2(device.queue.handle, 1, &[_]c.VkSubmitInfo2{submit_info}, this.work_done_fence), "Failed to submit to main queue");
+
+        try this.render_target_allocator.update(device);
     }
 
     fn deinit(this: *RenderState, device: VkDevice) void {
         this.render_target_allocator.deinit(device);
+
+        c.vmaDestroyBuffer(this.vk_allocator, this.textures_buffer, this.textures_mem_allocation);
+
         c.vkFreeCommandBuffers(device.handle, this.command_pool, 1, &[_]c.VkCommandBuffer{this.main_command_buffer});
         c.vkDestroyFence(device.handle, this.work_done_fence, null);
         c.vkDestroyCommandPool(device.handle, this.command_pool, null);
@@ -1379,9 +1465,9 @@ fn message_callback(
     return c.VK_FALSE;
 }
 
-fn vulkan_init_failure(message: []const u8) noreturn {
-    sdl_util.message_box("Vulkan initialization failed", message, .Error);
-    std.debug.panic("Vulkan  init error", .{});
+fn vulkan_failure(message: []const u8) noreturn {
+    sdl_util.message_box("Vulkan failure: ", message, .Error);
+    std.debug.panic("Vulkan failure", .{});
 }
 
 fn make_fence(device: c.VkDevice, signaled: bool) !c.VkFence {

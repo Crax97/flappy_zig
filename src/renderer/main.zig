@@ -3,6 +3,7 @@ const types = @import("types.zig");
 
 pub const Renderer = renderer.Renderer;
 
+pub const TextureDrawInfo = renderer.TextureDrawInfo;
 pub const Texture = types.Texture;
 pub const TextureHandle = types.TextureHandle;
 pub const TextureFlags = types.TextureFlags;

@@ -5,7 +5,11 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         const This = @This();
         const F = scalar(T);
 
-        pub const data: [N]T = std.mem.zeroes([N]T);
+        data: [N]T = std.mem.zeroes([N]T),
+
+        pub fn make(arr: [N]T) This {
+            return This{ .data = arr };
+        }
 
         pub fn zero() This {
             return .{};

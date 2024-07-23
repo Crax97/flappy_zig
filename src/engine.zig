@@ -3,9 +3,12 @@ const SDL = @import("clibs.zig");
 const sdl_util = @import("sdl_util.zig");
 
 const window = @import("window.zig");
-pub const renderer = @import("renderer/main.zig");
 const ecs = @import("ecs/ecs.zig");
-const World = ecs.World;
+
+pub const renderer = @import("renderer/main.zig");
+
+pub const World = ecs.World;
+pub const TextureHandle = renderer.TextureHandle;
 
 pub const Texture = renderer.Texture;
 

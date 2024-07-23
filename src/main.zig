@@ -8,29 +8,54 @@ const window = @import("window.zig");
 const sdl_util = @import("sdl_util.zig");
 const engine = @import("engine.zig");
 
+const math = @import("math/main.zig");
+const vec2 = math.vec2;
+const rect2 = math.rect2;
+
 const SDL = @import("clibs.zig");
 
 const World = world.World;
 
 const FlappyGame = struct {
-    bird_texture: engine.Texture = undefined,
+    bird_texture: engine.TextureHandle = undefined,
+    pear_texture: engine.TextureHandle = undefined,
 
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         self.bird_texture = try load_texture_from_file(engine_inst, "./assets/apple.png");
+        self.bird_texture = try load_texture_from_file(engine_inst, "./assets/pear.png");
+    
     }
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        _ = self;
-        _ = engine_inst;
-
-        // var renderer = &engine_inst.renderer;
-        // renderer.draw_texture(self.bird_texture, vec3(bird_transform, 0.0));
+        var renderer = &engine_inst.renderer;
+        try renderer.draw_texture(engine.renderer.TextureDrawInfo{
+            .texture = self.bird_texture,
+            .position = vec2.make(.{ -0.5, 0.2 }),
+            .scale = vec2.one(),
+            .region = rect2{
+                .offset = vec2.zero(),
+                .extent = vec2{
+                    .data = .{ 512.0, 512.0 },
+                },
+            },
+        });
+        try renderer.draw_texture(engine.renderer.TextureDrawInfo{
+            .texture = self.pear_texture,
+            .position = vec2.make(.{ 0.5, 0.2 }),
+            .scale = vec2.one(),
+            .region = rect2{
+                .offset = vec2.zero(),
+                .extent = vec2{
+                    .data = .{ 512.0, 512.0 },
+                },
+            },
+        });
     }
     pub fn end(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         engine_inst.renderer.free_texture(self.bird_texture);
     }
 };
 
-fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!engine.Texture {
+fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!engine.TextureHandle {
     var width: c_int = undefined;
     var height: c_int = undefined;
     var channels: c_int = undefined;
