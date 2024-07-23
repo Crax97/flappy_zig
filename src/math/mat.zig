@@ -2,6 +2,7 @@ const std = @import("std");
 const vec = @import("vec.zig");
 const scalar = vec.scalar;
 
+// Matrices are column-major
 pub fn mat_t(comptime T: type, comptime N: comptime_int) type {
     return struct {
         pub const Vec = vec.vec_t(T, N);

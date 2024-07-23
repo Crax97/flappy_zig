@@ -306,8 +306,9 @@ pub const Renderer = struct {
             null,
         );
 
-        const dummy = TextureDrawInfo.PushConstantData{
+        const push_constant = TextureDrawInfo.PushConstantData{
             .tex_buffer_address = render_state.textures_buffer_address,
+            .scene_constant_address = render_state.per_frame_buffer_address,
         };
 
         c.vkCmdPushConstants(
@@ -316,7 +317,7 @@ pub const Renderer = struct {
             c.VK_SHADER_STAGE_ALL,
             0,
             @sizeOf(TextureDrawInfo.PushConstantData),
-            &dummy,
+            &push_constant,
         );
 
         c.vkCmdSetViewport(
@@ -472,13 +473,25 @@ pub const Renderer = struct {
     }
 
     fn update_primitive_buffers(this: *const Renderer, render_state: *RenderState) void {
-        var buffer_alloc_info: c.VmaAllocationInfo = undefined;
-        c.vmaGetAllocationInfo(this.vk_allocator, render_state.textures_mem_allocation, &buffer_alloc_info);
-        const data: [*]TextureDrawInfo.GpuData = @ptrCast(@alignCast(buffer_alloc_info.pMappedData.?));
+        {
+            var buffer_alloc_info: c.VmaAllocationInfo = undefined;
+            c.vmaGetAllocationInfo(this.vk_allocator, render_state.textures_mem_allocation, &buffer_alloc_info);
+            const data: [*]TextureDrawInfo.GpuData = @ptrCast(@alignCast(buffer_alloc_info.pMappedData.?));
 
-        for (this.render_list.textures.items, 0..) |tex, i| {
-            const gpu_info = TextureDrawInfo.GpuData.from(tex);
-            data[i] = gpu_info;
+            for (this.render_list.textures.items, 0..) |tex, i| {
+                const gpu_info = TextureDrawInfo.GpuData.from(tex);
+                data[i] = gpu_info;
+            }
+        }
+        {
+            var buffer_alloc_info: c.VmaAllocationInfo = undefined;
+            c.vmaGetAllocationInfo(this.vk_allocator, render_state.per_frame_buffer_allocation, &buffer_alloc_info);
+            const data: [*]RenderState.RenderPOV = @ptrCast(@alignCast(buffer_alloc_info.pMappedData.?));
+
+            data[0] = RenderState.RenderPOV{
+                .projection_matrix = math.ortho(-2.0, 2.0, -2.0, 2.0, 0.001, 100.0),
+                .view_matrix = math.Mat4.IDENTITY,
+            };
         }
     }
 
@@ -1310,6 +1323,7 @@ pub const TextureDrawInfo = struct {
 
     const PushConstantData = packed struct {
         tex_buffer_address: c.VkDeviceAddress,
+        scene_constant_address: c.VkDeviceAddress,
     };
 
     texture: TextureHandle,
@@ -1340,6 +1354,11 @@ const RenderList = struct {
 };
 
 const RenderState = struct {
+    const RenderPOV = struct {
+        projection_matrix: math.Mat4 align(1),
+        view_matrix: math.Mat4 align(1),
+    };
+
     command_pool: c.VkCommandPool,
     work_done_fence: c.VkFence,
     main_command_buffer: c.VkCommandBuffer,
@@ -1347,6 +1366,10 @@ const RenderState = struct {
     render_target_allocator: RenderTargetAllocator,
 
     vk_allocator: c.VmaAllocator,
+
+    per_frame_buffer: c.VkBuffer,
+    per_frame_buffer_address: c.VkDeviceAddress,
+    per_frame_buffer_allocation: c.VmaAllocation,
 
     textures_buffer_address: c.VkDeviceAddress,
     textures_buffer: c.VkBuffer,
@@ -1369,6 +1392,11 @@ const RenderState = struct {
 
         const render_target_allocator = RenderTargetAllocator.init(allocator, vk_allocator);
 
+        var alloc_info = std.mem.zeroes(c.VmaAllocationCreateInfo);
+        alloc_info.usage = c.VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        alloc_info.flags = c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | c.VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        alloc_info.requiredFlags = c.VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+
         const buf_usage = c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | c.VK_BUFFER_USAGE_TRANSFER_DST_BIT | c.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
         var textures_buffer: c.VkBuffer = undefined;
         const buf_create_info = c.VkBufferCreateInfo{
@@ -1383,17 +1411,33 @@ const RenderState = struct {
         };
 
         var textures_mem_allocation: c.VmaAllocation = undefined;
-        var alloc_info = std.mem.zeroes(c.VmaAllocationCreateInfo);
-        alloc_info.usage = c.VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        alloc_info.flags = c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | c.VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        alloc_info.requiredFlags = c.VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-
         vk_check(c.vmaCreateBuffer(vk_allocator, &buf_create_info, &alloc_info, &textures_buffer, &textures_mem_allocation, null), "Failed to allocate texture data buffer");
 
         const textures_buffer_address = c.vkGetBufferDeviceAddress(device.handle, &c.VkBufferDeviceAddressInfo{
             .sType = c.VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
             .pNext = null,
             .buffer = textures_buffer,
+        });
+
+        var per_frame_buffer: c.VkBuffer = undefined;
+        const per_frame_buffer_buffer_info = c.VkBufferCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .pQueueFamilyIndices = &[1]u32{device.queue.qfi},
+            .queueFamilyIndexCount = 1,
+            .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+            .flags = 0,
+            .usage = buf_usage,
+            .size = texture_buf_size,
+        };
+
+        var per_frame_buffer_allocation: c.VmaAllocation = undefined;
+        vk_check(c.vmaCreateBuffer(vk_allocator, &per_frame_buffer_buffer_info, &alloc_info, &per_frame_buffer, &per_frame_buffer_allocation, null), "Failed to allocate texture data buffer");
+
+        const per_frame_buffer_address = c.vkGetBufferDeviceAddress(device.handle, &c.VkBufferDeviceAddressInfo{
+            .sType = c.VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+            .pNext = null,
+            .buffer = per_frame_buffer,
         });
 
         return .{
@@ -1406,6 +1450,9 @@ const RenderState = struct {
             .textures_buffer_address = textures_buffer_address,
             .textures_buffer = textures_buffer,
             .textures_mem_allocation = textures_mem_allocation,
+            .per_frame_buffer_address = per_frame_buffer_address,
+            .per_frame_buffer = per_frame_buffer,
+            .per_frame_buffer_allocation = per_frame_buffer_allocation,
         };
     }
 
@@ -1429,6 +1476,7 @@ const RenderState = struct {
     fn deinit(this: *RenderState, device: VkDevice) void {
         this.render_target_allocator.deinit(device);
 
+        c.vmaDestroyBuffer(this.vk_allocator, this.per_frame_buffer, this.per_frame_buffer_allocation);
         c.vmaDestroyBuffer(this.vk_allocator, this.textures_buffer, this.textures_mem_allocation);
 
         c.vkFreeCommandBuffers(device.handle, this.command_pool, 1, &[_]c.VkCommandBuffer{this.main_command_buffer});

@@ -119,7 +119,7 @@ pub fn ortho_t(comptime T: type, left: T, right: T, bottom: T, top: T, near: T, 
     return mat.mat_t(T, 4).new_cols(.{
         2.0 / rl,             0.0,                  0.0,                 0.0,
         0.0,                  2.0 / tb,             0.0,                 0.0,
-        0.0,                  0.0,                  0.0,                 -2.0 / fan,
+        0.0,                  0.0,                  -2.0 / fan,          0.0,
         -(right + left) / rl, -(top + bottom) / tb, -(far + near) / fan, 1.0,
     });
 }

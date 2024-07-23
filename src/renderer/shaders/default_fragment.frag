@@ -12,6 +12,11 @@ struct TexData {
   uint z_index;
 };
 
+struct SceneData {
+    mat4 projection;
+    mat4 view;
+};
+
 layout(set = 0, binding = 0) uniform sampler2D[] tex2d_samplers;
 
 layout(buffer_reference, std430,
@@ -19,7 +24,15 @@ layout(buffer_reference, std430,
   TexData data[];
 };
 
-layout(push_constant) uniform TexDrawConstants { TextureDrawInfoBase base; };
+layout(buffer_reference, std430,
+       buffer_reference_align = 16) readonly buffer SceneDataBase {
+  SceneData scene_data[];
+};
+
+layout(push_constant) uniform TexDrawConstants {
+    TextureDrawInfoBase base;
+    SceneDataBase scene_base;
+};
 
 layout(location = 0) in vec2 uv;
 layout(location = 1) flat in uint inst_index;
