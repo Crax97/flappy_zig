@@ -388,47 +388,33 @@ pub const Renderer = struct {
         };
         try quick_transition_images(cmd_buf, &final_transitions, this.allocator);
 
-        const regions = &[1]c.VkImageBlit{
-            c.VkImageBlit{
-                .srcOffsets = [2]c.VkOffset3D{
-                    c.VkOffset3D{
-                        .x = 0,
-                        .y = 0,
-                        .z = 0,
-                    },
-                    c.VkOffset3D{
-                        .x = 1920,
-                        .y = 1080,
-                        .z = 1,
-                    },
-                },
-                .srcSubresource = c.VkImageSubresourceLayers{
-                    .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                    .mipLevel = 0,
-                },
-                .dstOffsets = [2]c.VkOffset3D{
-                    c.VkOffset3D{
-                        .x = 0,
-                        .y = 0,
-                        .z = 0,
-                    },
-                    c.VkOffset3D{
-                        .x = @intCast(this.swapchain.extents.width),
-                        .y = @intCast(this.swapchain.extents.height),
-                        .z = 1,
-                    },
-                },
-                .dstSubresource = c.VkImageSubresourceLayers{
-                    .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                    .mipLevel = 0,
-                },
-            },
+        const regions = &[1]c.VkImageCopy{
+            c.VkImageCopy{ .srcOffset = c.VkOffset3D{
+                .x = 0,
+                .y = 0,
+                .z = 0,
+            }, .srcSubresource = c.VkImageSubresourceLayers{
+                .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+                .mipLevel = 0,
+            }, .dstOffset = c.VkOffset3D{
+                .x = 0,
+                .y = 0,
+                .z = 0,
+            }, .dstSubresource = c.VkImageSubresourceLayers{
+                .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+                .mipLevel = 0,
+            }, .extent = c.VkExtent3D{
+                .width = this.swapchain.extents.width,
+                .height = this.swapchain.extents.height,
+                .depth = 1,
+            } },
         };
-        c.vkCmdBlitImage(
+
+        c.vkCmdCopyImage(
             cmd_buf,
             current_render_texture.image,
             c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -436,7 +422,6 @@ pub const Renderer = struct {
             c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             1,
             regions,
-            c.VK_FILTER_NEAREST,
         );
         quick_transition_image(
             cmd_buf,
@@ -898,7 +883,7 @@ pub const Renderer = struct {
         };
 
         // zig fmt: off
-        
+
         const dynamic_info = c.VkPipelineRenderingCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .pNext = null,
@@ -910,8 +895,8 @@ pub const Renderer = struct {
             .viewMask = 0,
         };
 
-        const dynamic_states: [2]c.VkDynamicState = .{ 
-            c.VK_DYNAMIC_STATE_VIEWPORT, 
+        const dynamic_states: [2]c.VkDynamicState = .{
+            c.VK_DYNAMIC_STATE_VIEWPORT,
             c.VK_DYNAMIC_STATE_SCISSOR
         };
 
@@ -969,10 +954,10 @@ pub const Renderer = struct {
                 .minDepthBounds = 0.0,
                 .maxDepthBounds = 1.0,
             },
-            .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{ 
-                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, 
-                .pNext = null, 
-                .flags = 0, 
+            .pColorBlendState = &c.VkPipelineColorBlendStateCreateInfo{
+                .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
                 .logicOpEnable = c.VK_FALSE,
                 .logicOp = c.VK_LOGIC_OP_NO_OP,
                 .attachmentCount = 1,
@@ -987,7 +972,7 @@ pub const Renderer = struct {
                     .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
                     },
                 },
-                
+
             },
             .pDynamicState = &c.VkPipelineDynamicStateCreateInfo{
                 .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
@@ -1001,7 +986,7 @@ pub const Renderer = struct {
             .basePipelineHandle = null,
             .basePipelineIndex = 0,
         };
-        
+
         // zig fmt: on
         const infos: [1]c.VkGraphicsPipelineCreateInfo = .{info};
         var pipelines: [1]c.VkPipeline = [1]c.VkPipeline{undefined};
@@ -1291,7 +1276,7 @@ pub const TextureDrawInfo = struct {
             const arr_ext = info.region.extent.data;
 
             // zig fmt: off
-            return .{ 
+            return .{
                 .position_scale = .{ arr_pos[0], arr_pos[1], arr_scale[0], arr_scale[1] },
                 .offset_extent_px = .{ arr_off[0], arr_off[1], arr_ext[0], arr_ext[1] },
                 .rotation = info.rotation,
