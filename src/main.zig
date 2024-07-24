@@ -9,8 +9,8 @@ const sdl_util = @import("sdl_util.zig");
 const engine = @import("engine.zig");
 
 const math = @import("math/main.zig");
-const vec2 = math.vec2;
-const rect2 = math.rect2;
+const Vec2 = math.Vec2;
+const Rect2 = math.Rect2;
 
 const SDL = @import("clibs.zig");
 
@@ -23,28 +23,27 @@ const FlappyGame = struct {
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         self.bird_texture = try load_texture_from_file(engine_inst, "./assets/apple.png");
         self.bird_texture = try load_texture_from_file(engine_inst, "./assets/pear.png");
-    
     }
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         var renderer = &engine_inst.renderer;
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
             .texture = self.bird_texture,
-            .position = vec2.make(.{ -0.5, 0.2 }),
-            .scale = vec2.one(),
-            .region = rect2{
-                .offset = vec2.zero(),
-                .extent = vec2{
+            .position = Vec2.new(.{ -0.5, 0.2 }),
+            .scale = Vec2.one(),
+            .region = Rect2{
+                .offset = Vec2.zero(),
+                .extent = Vec2{
                     .data = .{ 512.0, 512.0 },
                 },
             },
         });
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
             .texture = self.pear_texture,
-            .position = vec2.make(.{ 0.5, 0.2 }),
-            .scale = vec2.one(),
-            .region = rect2{
-                .offset = vec2.zero(),
-                .extent = vec2{
+            .position = Vec2.new(.{ 0.5, 0.2 }),
+            .scale = Vec2.one(),
+            .region = Rect2{
+                .offset = Vec2.zero(),
+                .extent = Vec2{
                     .data = .{ 512.0, 512.0 },
                 },
             },
