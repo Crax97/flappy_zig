@@ -6,8 +6,9 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
     return struct {
         const This = @This();
         const F = scalar(T);
+        const V = @Vector(N, T);
 
-        data: [N]T align(1) = std.mem.zeroes([N]T),
+        data: V,
 
         pub const ZERO: This = splat(0.0);
         pub const ONE: This = splat(1.0);
@@ -17,13 +18,9 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         }
 
         pub fn splat(value: F) This {
-            var ret = std.mem.zeroes(This);
-
-            inline for (0..N) |i| {
-                ret.data[i] = value;
-            }
-
-            return ret;
+            return .{
+                .data = @splat(value),
+            };
         }
 
         pub fn transform(this: *const This, transformation: mat.mat_t(T, N + 1)) vec_t(T, N + 1) {
@@ -38,7 +35,9 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
 
         pub fn extend(this: *const This, value: T) vec_t(T, N + 1) {
             var data_ext = std.mem.zeroes([N + 1]T);
-            @memcpy(data_ext[0..N], &this.data);
+            inline for (0..N) |i| {
+                data_ext[i] = this.data[i];
+            }
             data_ext[N] = value;
             return .{ .data = data_ext };
         }
@@ -46,10 +45,13 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         pub fn truncate(this: *const This) vec_t(T, N - 1) {
             if (N <= 1) @compileError("Can't truncate a vec to less than 1 elements!");
             var data_trunc = std.mem.zeroes([N - 1]T);
-            @memcpy(data_trunc[0 .. N - 1], this.data[0 .. N - 1]);
+            inline for (0..N - 1) |i| {
+                data_trunc[i] = this.data[i];
+            }
             return .{ .data = data_trunc };
         }
 
+        // Prefer eql_approx, as it is faster
         pub fn eql(this: *const This, other: This) bool {
             inline for (0..N) |i| {
                 if (this.data[i] != other.data[i]) {
@@ -59,21 +61,11 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
             return true;
         }
         pub fn eql_approx(this: *const This, other: This, tolerance: T) bool {
-            inline for (0..N) |i| {
-                if (!std.math.approxEqAbs(T, this.data[i], other.data[i], tolerance)) {
-                    return false;
-                }
-            }
-            return true;
+            return @abs(@reduce(.Max, this.data - other.data)) < tolerance;
         }
 
         pub fn magnitude_squared(this: *const This) F {
-            var accum: F = std.mem.zeroes(F);
-
-            inline for (0..N) |i| {
-                accum += this.data[i] * this.data[i];
-            }
-            return accum;
+            return this.dot(this);
         }
 
         pub fn magnitude(this: *const This) F {
@@ -81,63 +73,40 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         }
 
         pub fn add(this: *const This, other: This) This {
-            var ret = This.ZERO;
-
-            inline for (0..N) |i| {
-                ret.data[i] = this.data[i] + other.data[i];
-            }
-
-            return ret;
+            return .{
+                .data = this.data + other.data,
+            };
         }
 
         pub fn sub(this: *const This, other: This) This {
-            var ret = This.ZERO;
-
-            inline for (0..N) |i| {
-                ret.data[i] = this.data[i] - other.data[i];
-            }
-
-            return ret;
+            return .{
+                .data = this.data - other.data,
+            };
         }
 
         pub fn mul(this: *const This, other: This) This {
-            var ret = This.ZERO;
-
-            inline for (0..N) |i| {
-                ret.data[i] = this.data[i] * other.data[i];
-            }
-
-            return ret;
+            return .{
+                .data = this.data * other.data,
+            };
         }
 
         pub fn scale(this: *const This, amount: T) This {
-            var ret = This.ZERO;
-
-            inline for (0..N) |i| {
-                ret.data[i] = this.data[i] * amount;
-            }
-
-            return ret;
+            const S: V = @splat(amount);
+            return .{
+                .data = this.data * S,
+            };
         }
 
         pub fn div(this: *const This, other: This) This {
-            var ret = This.ZERO;
-
-            inline for (0..N) |i| {
-                ret.data[i] = this.data[i] / other.data[i];
-            }
-
-            return ret;
+            return .{
+                .data = this.data / other.data,
+            };
         }
 
         pub fn neg(this: *const This) This {
-            var ret = This.ZERO;
-
-            inline for (0..N) |i| {
-                ret.data[i] = -this.data[i];
-            }
-
-            return ret;
+            return .{
+                .data = -this.data,
+            };
         }
 
         pub fn normalize(this: *const This) This {
@@ -146,13 +115,12 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         }
 
         pub inline fn dot(this: *const This, other: This) F {
-            var accum: F = std.mem.zeroes(F);
-            inline for (0..N) |i| {
-                const x: F = @floatCast(this.data[i]);
-                const y: F = @floatCast(other.data[i]);
-                accum += x * y;
-            }
-            return accum;
+            const D = this.data * other.data;
+            return @reduce(.Add, D);
+        }
+
+        pub fn array(this: *const This) [N]T {
+            return this.data;
         }
     };
 }

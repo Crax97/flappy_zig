@@ -29,9 +29,9 @@ const FlappyGame = struct {
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
             .texture = self.bird_texture,
             .position = Vec2.new(.{ -0.5, 0.2 }),
-            .scale = Vec2.one(),
+            .scale = Vec2.ONE,
             .region = Rect2{
-                .offset = Vec2.zero(),
+                .offset = Vec2.ZERO,
                 .extent = Vec2{
                     .data = .{ 512.0, 512.0 },
                 },
@@ -40,9 +40,9 @@ const FlappyGame = struct {
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
             .texture = self.pear_texture,
             .position = Vec2.new(.{ 0.5, 0.2 }),
-            .scale = Vec2.one(),
+            .scale = Vec2.ONE,
             .region = Rect2{
-                .offset = Vec2.zero(),
+                .offset = Vec2.ONE,
                 .extent = Vec2{
                     .data = .{ 512.0, 512.0 },
                 },

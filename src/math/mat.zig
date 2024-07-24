@@ -6,7 +6,7 @@ pub fn mat_t(comptime T: type, comptime N: comptime_int) type {
     return struct {
         pub const Vec = vec.vec_t(T, N);
         const This = @This();
-        cols: [N]Vec align(1),
+        cols: [N]Vec,
 
         pub const IDENTITY: This = identity(T, N);
 
@@ -15,7 +15,9 @@ pub fn mat_t(comptime T: type, comptime N: comptime_int) type {
         pub fn new_cols(data: [N * N]T) This {
             var cols = std.mem.zeroes([N]Vec);
             inline for (0..N) |i| {
-                @memcpy(&cols[i].data, data[i * N .. i * N + N]);
+                inline for (0..N) |j| {
+                    cols[i].data[j] = data[i * N + j];
+                }
             }
             return .{ .cols = cols };
         }
@@ -198,7 +200,9 @@ pub fn mat_t(comptime T: type, comptime N: comptime_int) type {
         pub fn flat_arr(this: *const This) [N * N]T {
             var arr = std.mem.zeroes([N * N]T);
             inline for (0..N) |i| {
-                @memcpy(arr[i * N .. i * N + N], &this.cols[i].data);
+                inline for (0..N) |j| {
+                    arr[i * N + j] = this.cols[i].data[j];
+                }
             }
             return arr;
         }

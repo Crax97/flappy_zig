@@ -1314,7 +1314,7 @@ pub const TextureDrawInfo = struct {
 
     texture: TextureHandle,
     position: Vec2,
-    scale: Vec2 = Vec2.one(),
+    scale: Vec2 = Vec2.ONE,
     region: Rect2,
     rotation: f32 = 0.0,
     z_index: u32 = 0,

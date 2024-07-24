@@ -124,6 +124,14 @@ pub fn ortho_t(comptime T: type, left: T, right: T, bottom: T, top: T, near: T, 
     });
 }
 
+test "Array" {
+    const v = Vec4.new(.{ 1.0, 2.0, 3.0, 4.0 });
+    try std.testing.expectEqual(1.0, v.array()[0]);
+    try std.testing.expectEqual(2.0, v.array()[1]);
+    try std.testing.expectEqual(3.0, v.array()[2]);
+    try std.testing.expectEqual(4.0, v.array()[3]);
+}
+
 test "Identity" {
     const ID = Mat4.IDENTITY;
     const ID_TRANSP = ID.transpose();
