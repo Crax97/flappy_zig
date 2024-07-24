@@ -48,7 +48,7 @@ void main() {
 
   vec3 offset = vec3(tex_data.position_scale.xy, 0.0);
 
-  vec3 position_unsc = offset + verts[gl_VertexIndex];
+  vec3 position_unsc = (offset + verts[gl_VertexIndex]) * vec3(tex_data.position_scale.zw, 0.0);
   vec4 position = vec4(position_unsc, 1.0) * proj;
 
   gl_Position = position;

@@ -23,6 +23,25 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
             };
         }
 
+        pub fn x(this: *const This) T {
+            return this.data[0];
+        }
+
+        pub fn y(this: *const This) T {
+            if (N < 2) @compileError("Not enough elements!" ++ N);
+            return this.data[1];
+        }
+
+        pub fn z(this: *const This) T {
+            if (N < 3) @compileError("Not enough elements!" ++ N);
+            return this.data[2];
+        }
+
+        pub fn w(this: *const This) T {
+            if (N < 4) @compileError("Not enough elements!" ++ N);
+            return this.data[3];
+        }
+
         pub fn transform(this: *const This, transformation: mat.mat_t(T, N + 1)) vec_t(T, N + 1) {
             const vec_ext = this.extend(1.0);
             var res = std.mem.zeroes([N + 1]T);

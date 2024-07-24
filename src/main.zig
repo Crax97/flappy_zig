@@ -29,7 +29,7 @@ const FlappyGame = struct {
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
             .texture = self.bird_texture,
             .position = Vec2.new(.{ -0.5, 0.2 }),
-            .scale = Vec2.ONE,
+            .scale = Vec2.ONE.scale(100.0),
             .region = Rect2{
                 .offset = Vec2.ZERO,
                 .extent = Vec2{
@@ -40,7 +40,7 @@ const FlappyGame = struct {
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
             .texture = self.pear_texture,
             .position = Vec2.new(.{ 0.5, 0.2 }),
-            .scale = Vec2.ONE,
+            .scale = Vec2.ONE.scale(100.0),
             .region = Rect2{
                 .offset = Vec2.ONE,
                 .extent = Vec2{
@@ -69,7 +69,13 @@ fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!engin
     };
     const data = data_p[0..@intCast(data_size)];
 
-    return try inst.renderer.alloc_texture(engine.Texture.CreateInfo{ .width = @intCast(width), .height = @intCast(height), .format = format, .initial_bytes = data });
+    return try inst.renderer.alloc_texture(engine.Texture.CreateInfo{
+        .width = @intCast(width),
+        .height = @intCast(height),
+        .format = format,
+        .initial_bytes = data,
+        .sampler_config = engine.renderer.SamplerConfig.NEAREST,
+    });
 }
 
 pub fn main() !void {

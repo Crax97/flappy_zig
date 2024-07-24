@@ -57,6 +57,12 @@ pub const SamplerConfig = struct {
     address_v: AddressMode = AddressMode.ClampToBorder,
     address_w: AddressMode = AddressMode.ClampToBorder,
     compare_op: ?CompareOp = null,
+
+    pub const NEAREST = SamplerConfig{
+        .min_filter = Filter.Nearest,
+        .mag_filter = Filter.Nearest,
+        .mipmap_mode = MipMode.Nearest,
+    };
 };
 
 pub const Buffer = struct {

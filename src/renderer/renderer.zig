@@ -6,6 +6,7 @@ const rta = @import("allocators/render_target_allocator.zig");
 const ta = @import("allocators/texture_allocator.zig");
 const c = @import("../clibs.zig");
 const types = @import("types.zig");
+const camera = @import("camera.zig");
 
 const Window = @import("../window.zig").Window;
 const Allocator = std.mem.Allocator;
@@ -24,6 +25,8 @@ const TextureAllocation = ta.TextureAllocation;
 
 const Vec2 = math.Vec2;
 const Rect2 = math.Rect2;
+
+const Camera2D = camera.Camera2D;
 
 const shaders = struct {
     const DEFAULT_TEXTURE_VS = @embedFile("../spirv/default_textures.vert.spv");
@@ -58,6 +61,8 @@ pub const Renderer = struct {
 
     default_texture_pipeline_layout: c.VkPipelineLayout,
     default_texture_pipeline: c.VkPipeline,
+
+    camera: Camera2D = .{},
 
     current_render_state: usize = 0,
 
@@ -489,8 +494,8 @@ pub const Renderer = struct {
             const data: [*]RenderState.RenderPOV = @ptrCast(@alignCast(buffer_alloc_info.pMappedData.?));
 
             data[0] = RenderState.RenderPOV{
-                .projection_matrix = math.ortho(-2.0, 2.0, -2.0, 2.0, 0.001, 100.0),
-                .view_matrix = math.Mat4.IDENTITY,
+                .projection_matrix = this.camera.projection_matrix(),
+                .view_matrix = this.camera.view_matrix(),
             };
         }
     }
