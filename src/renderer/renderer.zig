@@ -22,8 +22,8 @@ const RenderTargetAllocator = rta.RenderTargetAllocator;
 const TextureAllocator = ta.TextureAllocator;
 const TextureAllocation = ta.TextureAllocation;
 
-const vec2 = math.vec2;
-const rect2 = math.rect2;
+const Vec2 = math.Vec2;
+const Rect2 = math.Rect2;
 
 const shaders = struct {
     const DEFAULT_TEXTURE_VS = @embedFile("../spirv/default_textures.vert.spv");
@@ -34,6 +34,9 @@ const required_device_extensions = [_][*:0]const u8{ "VK_KHR_swapchain", "VK_KHR
 
 pub const Renderer = struct {
     const FRAMES_IN_FLIGHT = 3;
+    const INNER_WIDTH: u32 = 1024;
+    const INNER_HEIGHT: u32 = 720;
+
     const default_color_format = c.VK_FORMAT_R8G8B8A8_UNORM;
     const default_depth_format = c.VK_FORMAT_D32_SFLOAT;
 
@@ -236,15 +239,18 @@ pub const Renderer = struct {
 
         const current_swapchain_img = this.swapchain.images[this.swapchain.current_image];
         const current_render_texture = try render_state.render_target_allocator.get(this.device, .{
-            .width = 1920,
-            .height = 1080,
+            .width = INNER_WIDTH,
+            .height = INNER_HEIGHT,
             .format = .rgba_8,
         });
         const rendering_info = c.VkRenderingInfo{
             .sType = c.VK_STRUCTURE_TYPE_RENDERING_INFO,
             .renderArea = c.VkRect2D{
                 .offset = .{},
-                .extent = this.swapchain.extents,
+                .extent = c.VkExtent2D{
+                    .width = INNER_WIDTH,
+                    .height = INNER_HEIGHT,
+                },
             },
             .pColorAttachments = &[1]c.VkRenderingAttachmentInfo{
                 c.VkRenderingAttachmentInfo{
@@ -319,8 +325,8 @@ pub const Renderer = struct {
             1,
             &[1]c.VkViewport{
                 c.VkViewport{
-                    .width = @floatFromInt(this.swapchain.extents.width),
-                    .height = @floatFromInt(this.swapchain.extents.height),
+                    .width = @floatFromInt(INNER_WIDTH),
+                    .height = @floatFromInt(INNER_HEIGHT),
                     .minDepth = 0.0,
                     .maxDepth = 1.0,
                     .x = 0,
@@ -335,7 +341,10 @@ pub const Renderer = struct {
             1,
             &[1]c.VkRect2D{
                 c.VkRect2D{
-                    .extent = this.swapchain.extents,
+                    .extent = c.VkExtent2D{
+                        .width = INNER_WIDTH,
+                        .height = INNER_HEIGHT,
+                    },
                     .offset = .{
                         .x = 0,
                         .y = 0,
@@ -388,33 +397,43 @@ pub const Renderer = struct {
         };
         try quick_transition_images(cmd_buf, &final_transitions, this.allocator);
 
-        const regions = &[1]c.VkImageCopy{
-            c.VkImageCopy{ .srcOffset = c.VkOffset3D{
-                .x = 0,
-                .y = 0,
-                .z = 0,
+        const regions = &[1]c.VkImageBlit{
+            c.VkImageBlit{ .srcOffsets = .{
+                c.VkOffset3D{
+                    .x = 0,
+                    .y = 0,
+                    .z = 0,
+                },
+                c.VkOffset3D{
+                    .x = @intCast(INNER_WIDTH),
+                    .y = @intCast(INNER_HEIGHT),
+                    .z = 1,
+                },
             }, .srcSubresource = c.VkImageSubresourceLayers{
                 .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
                 .baseArrayLayer = 0,
                 .layerCount = 1,
                 .mipLevel = 0,
-            }, .dstOffset = c.VkOffset3D{
-                .x = 0,
-                .y = 0,
-                .z = 0,
+            }, .dstOffsets = .{
+                c.VkOffset3D{
+                    .x = 0,
+                    .y = 0,
+                    .z = 0,
+                },
+                c.VkOffset3D{
+                    .x = @intCast(this.swapchain.extents.width),
+                    .y = @intCast(this.swapchain.extents.height),
+                    .z = 1,
+                },
             }, .dstSubresource = c.VkImageSubresourceLayers{
                 .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
                 .baseArrayLayer = 0,
                 .layerCount = 1,
                 .mipLevel = 0,
-            }, .extent = c.VkExtent3D{
-                .width = this.swapchain.extents.width,
-                .height = this.swapchain.extents.height,
-                .depth = 1,
             } },
         };
 
-        c.vkCmdCopyImage(
+        c.vkCmdBlitImage(
             cmd_buf,
             current_render_texture.image,
             c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -422,6 +441,7 @@ pub const Renderer = struct {
             c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             1,
             regions,
+            c.VK_FILTER_NEAREST,
         );
         quick_transition_image(
             cmd_buf,
@@ -1293,9 +1313,9 @@ pub const TextureDrawInfo = struct {
     };
 
     texture: TextureHandle,
-    position: vec2,
-    scale: vec2 = vec2.one(),
-    region: rect2,
+    position: Vec2,
+    scale: Vec2 = Vec2.one(),
+    region: Rect2,
     rotation: f32 = 0.0,
     z_index: u32 = 0,
 };
