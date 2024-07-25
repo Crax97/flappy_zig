@@ -1,5 +1,5 @@
 const std = @import("std");
-const SDL = @import("clibs.zig");
+const c = @import("clibs.zig");
 const sdl_util = @import("sdl_util.zig");
 
 const window = @import("window.zig");
@@ -62,17 +62,39 @@ pub const Engine = struct {
     }
 
     pub fn run_loop(this: *Engine, game: Game) !void {
+        var move_cam_left: f32 = 0.0;
         try game.init(game.target, this);
         while (this.running) {
-            var event: SDL.SDL_Event = undefined;
-            while (SDL.SDL_PollEvent(&event) != 0) {
+            var event: c.SDL_Event = undefined;
+            while (c.SDL_PollEvent(&event) != 0) {
                 switch (event.type) {
-                    SDL.SDL_QUIT => {
+                    c.SDL_QUIT => {
                         this.running = false;
                     },
+                    c.SDL_KEYDOWN => {
+                        const key_event = event.key;
+                        if (key_event.keysym.sym == c.SDLK_LEFT) {
+                            move_cam_left = 1.0;
+                        }
+                        if (key_event.keysym.sym == c.SDLK_RIGHT) {
+                            move_cam_left = -1.0;
+                        }
+                    },
+                    c.SDL_KEYUP => {
+                        const key_event = event.key;
+                        if (key_event.keysym.sym == c.SDLK_LEFT or
+                            key_event.keysym.sym == c.SDLK_RIGHT)
+                        {
+                            move_cam_left = 0.0;
+                        }
+                    },
+
                     else => {},
                 }
             }
+
+            const offset = @import("math/main.zig").vec2(move_cam_left, 0.0);
+            this.renderer.camera.position = this.renderer.camera.position.add(offset);
 
             try this.renderer.start_rendering();
             try game.update(game.target, this);

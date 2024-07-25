@@ -5,16 +5,14 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 
 struct TexData {
-  vec4 position_scale;
+  mat4 transform;
   vec4 offset_extent_px;
-  float rotation;
   uint tex_id;
-  uint z_index;
 };
 
 struct SceneData {
-    mat4 projection;
-    mat4 view;
+  mat4 projection;
+  mat4 view;
 };
 
 layout(set = 0, binding = 0) uniform sampler2D[] tex2d_samplers;
@@ -30,8 +28,8 @@ layout(buffer_reference, std430,
 };
 
 layout(push_constant) uniform TexDrawConstants {
-    TextureDrawInfoBase base;
-    SceneDataBase scene_base;
+  TextureDrawInfoBase base;
+  SceneDataBase scene_base;
 };
 
 layout(location = 0) out vec2 uv;
@@ -44,14 +42,15 @@ void main() {
               vec3(0.5, -0.5, 0.0), vec3(-0.5, 0.5, 0.0), vec3(0.5, 0.5, 0.0));
 
   TexData tex_data = base.data[gl_InstanceIndex];
+  vec2 tex_size = textureSize(tex2d_samplers[tex_data.tex_id], 0);
+
   mat4 proj = scene_base.scene_data[0].projection;
+  mat4 view = scene_base.scene_data[0].view;
+  mat4 mvp = proj * view * tex_data.transform;
 
-  vec3 offset = vec3(tex_data.position_scale.xy, 0.0);
+  vec4 position_camera = mvp * vec4(verts[gl_VertexIndex], 1.0);
 
-  vec3 position_unsc = (offset + verts[gl_VertexIndex]) * vec3(tex_data.position_scale.zw, 0.0);
-  vec4 position = vec4(position_unsc, 1.0) * proj;
-
-  gl_Position = position;
+  gl_Position = position_camera;
   uv = (verts[gl_VertexIndex].xy + vec2(0.5));
   inst_index = gl_InstanceIndex;
 }

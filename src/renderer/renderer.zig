@@ -24,7 +24,10 @@ const TextureAllocator = ta.TextureAllocator;
 const TextureAllocation = ta.TextureAllocation;
 
 const Vec2 = math.Vec2;
+const Mat4 = math.Mat4;
 const Rect2 = math.Rect2;
+
+const vec3 = math.vec3;
 
 const Camera2D = camera.Camera2D;
 
@@ -37,8 +40,8 @@ const required_device_extensions = [_][*:0]const u8{ "VK_KHR_swapchain", "VK_KHR
 
 pub const Renderer = struct {
     const FRAMES_IN_FLIGHT = 3;
-    const INNER_WIDTH: u32 = 1024;
-    const INNER_HEIGHT: u32 = 720;
+    const INNER_WIDTH: u32 = 800;
+    const INNER_HEIGHT: u32 = 600;
 
     const default_color_format = c.VK_FORMAT_R8G8B8A8_UNORM;
     const default_depth_format = c.VK_FORMAT_D32_SFLOAT;
@@ -494,7 +497,7 @@ pub const Renderer = struct {
             const data: [*]RenderState.RenderPOV = @ptrCast(@alignCast(buffer_alloc_info.pMappedData.?));
 
             data[0] = RenderState.RenderPOV{
-                .projection_matrix = this.camera.projection_matrix(),
+                .projection_matrix = this.camera.projection_matrix(math.vec2(800, 600)),
                 .view_matrix = this.camera.view_matrix(),
             };
         }
@@ -1300,29 +1303,22 @@ const Swapchain = struct {
 
 pub const TextureDrawInfo = struct {
     const GpuData = struct {
-        position_scale: [4]f32 align(1),
+        transform_matrix: Mat4,
         offset_extent_px: [4]f32 align(1),
-        rotation: f32 align(1),
         tex_id: u32 align(1),
-        z_index: u32 align(1),
-        _pad: u32 align(1) = 0,
+        _pad_0: u32 align(1) = 0,
+        _pad_1: u32 align(1) = 0,
+        _pad_2: u32 align(1) = 0,
 
         fn from(info: TextureDrawInfo) GpuData {
-            const arr_pos = info.position.data;
-            const arr_scale = info.scale.data;
             const arr_off = info.region.offset.data;
             const arr_ext = info.region.extent.data;
 
-            // zig fmt: off
             return .{
-                .position_scale = .{ arr_pos[0], arr_pos[1], arr_scale[0], arr_scale[1] },
+                .transform_matrix = math.transformation(info.position.extend(@floatFromInt(info.z_index)), info.scale.mul(info.region.extent).extend(1.0), vec3(0.0, 0.0, info.rotation)),
                 .offset_extent_px = .{ arr_off[0], arr_off[1], arr_ext[0], arr_ext[1] },
-                .rotation = info.rotation,
                 .tex_id = info.texture.id,
-                .z_index = info.z_index,
-
             };
-            // zig fmt: on
         }
     };
 
@@ -1336,7 +1332,7 @@ pub const TextureDrawInfo = struct {
     scale: Vec2 = Vec2.ONE,
     region: Rect2,
     rotation: f32 = 0.0,
-    z_index: u32 = 0,
+    z_index: i32 = 0,
 };
 
 const TextureDrawList = std.ArrayList(TextureDrawInfo);

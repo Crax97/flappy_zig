@@ -44,6 +44,14 @@ pub fn cross(this: *Vec3, other: Vec3) Vec3 {
     return Vec3{ .data = [3]f32{ ret[0], ret[1], ret[2] } };
 }
 
+pub fn transformation(location: Vec3, scale: Vec3, rotation_euler: Vec3) Mat4 {
+    const r = rot_x(rotation_euler.x())
+        .mul(rot_y(rotation_euler.y())
+        .mul(rot_z(rotation_euler.z())));
+    return r.mul(translation(location))
+        .mul(scaling(scale));
+}
+
 pub fn translation(location: Vec3) Mat4 {
     const data = location.data;
     return Mat4.new_cols(.{

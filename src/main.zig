@@ -11,50 +11,63 @@ const engine = @import("engine.zig");
 const math = @import("math/main.zig");
 const Vec2 = math.Vec2;
 const Rect2 = math.Rect2;
+const vec2 = math.vec2;
+
+const TextureHandle = engine.TextureHandle;
 
 const SDL = @import("clibs.zig");
 
 const World = world.World;
 
 const FlappyGame = struct {
-    bird_texture: engine.TextureHandle = undefined,
-    pear_texture: engine.TextureHandle = undefined,
+    bird_texture: TextureInfo = undefined,
+    pear_texture: TextureInfo = undefined,
+    pos: Vec2 = Vec2.ZERO,
+    rot: f32 = 0.0,
 
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         self.bird_texture = try load_texture_from_file(engine_inst, "./assets/apple.png");
-        self.bird_texture = try load_texture_from_file(engine_inst, "./assets/pear.png");
+        self.pear_texture = try load_texture_from_file(engine_inst, "./assets/pear.png");
     }
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         var renderer = &engine_inst.renderer;
+        self.pos = self.pos.add(vec2(0.01, 0.0));
+        self.rot += 0.1;
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
-            .texture = self.bird_texture,
-            .position = Vec2.new(.{ -0.5, 0.2 }),
-            .scale = Vec2.ONE.scale(100.0),
+            .texture = self.bird_texture.handle,
+            .position = self.pos,
+            .rotation = self.rot,
+            .scale = Vec2.ONE,
             .region = Rect2{
                 .offset = Vec2.ZERO,
-                .extent = Vec2{
-                    .data = .{ 512.0, 512.0 },
-                },
+                .extent = self.bird_texture.extents,
             },
+            .z_index = 0,
         });
-        try renderer.draw_texture(engine.renderer.TextureDrawInfo{
-            .texture = self.pear_texture,
-            .position = Vec2.new(.{ 0.5, 0.2 }),
-            .scale = Vec2.ONE.scale(100.0),
-            .region = Rect2{
-                .offset = Vec2.ONE,
-                .extent = Vec2{
-                    .data = .{ 512.0, 512.0 },
-                },
-            },
-        });
+        // try renderer.draw_texture(engine.renderer.TextureDrawInfo{
+        //     .texture = self.pear_texture.handle,
+        //     .position = Vec2.ZERO,
+        //     .rotation = 0.0,
+        //     .scale = Vec2.ONE,
+        //     .region = Rect2{
+        //         .offset = Vec2.ONE,
+        //         .extent = self.pear_texture.extents,
+        //     },
+        //     .z_index = 0,
+        // });
     }
     pub fn end(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        engine_inst.renderer.free_texture(self.bird_texture);
+        engine_inst.renderer.free_texture(self.pear_texture.handle);
+        engine_inst.renderer.free_texture(self.bird_texture.handle);
     }
 };
 
-fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!engine.TextureHandle {
+const TextureInfo = struct {
+    handle: TextureHandle,
+    extents: Vec2,
+};
+
+fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!TextureInfo {
     var width: c_int = undefined;
     var height: c_int = undefined;
     var channels: c_int = undefined;
@@ -69,13 +82,18 @@ fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!engin
     };
     const data = data_p[0..@intCast(data_size)];
 
-    return try inst.renderer.alloc_texture(engine.Texture.CreateInfo{
+    const handle = try inst.renderer.alloc_texture(engine.Texture.CreateInfo{
         .width = @intCast(width),
         .height = @intCast(height),
         .format = format,
         .initial_bytes = data,
         .sampler_config = engine.renderer.SamplerConfig.NEAREST,
     });
+
+    return TextureInfo{
+        .handle = handle,
+        .extents = vec2(@floatFromInt(width), @floatFromInt(height)),
+    };
 }
 
 pub fn main() !void {
