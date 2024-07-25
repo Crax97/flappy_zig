@@ -44,17 +44,17 @@ const FlappyGame = struct {
             },
             .z_index = 0,
         });
-        // try renderer.draw_texture(engine.renderer.TextureDrawInfo{
-        //     .texture = self.pear_texture.handle,
-        //     .position = Vec2.ZERO,
-        //     .rotation = 0.0,
-        //     .scale = Vec2.ONE,
-        //     .region = Rect2{
-        //         .offset = Vec2.ONE,
-        //         .extent = self.pear_texture.extents,
-        //     },
-        //     .z_index = 0,
-        // });
+        try renderer.draw_texture(engine.renderer.TextureDrawInfo{
+            .texture = self.pear_texture.handle,
+            .position = Vec2.ZERO,
+            .rotation = 0.0,
+            .scale = Vec2.ONE,
+            .region = Rect2{
+                .offset = Vec2.ONE,
+                .extent = self.pear_texture.extents,
+            },
+            .z_index = 0,
+        });
     }
     pub fn end(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         engine_inst.renderer.free_texture(self.pear_texture.handle);

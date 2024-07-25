@@ -36,7 +36,7 @@ const shaders = struct {
     const DEFAULT_TEXTURE_FS = @embedFile("../spirv/default_fragment.frag.spv");
 };
 
-const required_device_extensions = [_][*:0]const u8{ "VK_KHR_swapchain", "VK_KHR_dynamic_rendering" };
+const required_device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
 
 pub const Renderer = struct {
     const FRAMES_IN_FLIGHT = 3;
@@ -184,7 +184,7 @@ pub const Renderer = struct {
                 },
             }, .{}, .{
                 .layout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .access_flags = c.VK_ACCESS_2_MEMORY_WRITE_BIT,
+                .access_flags = c.VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 .pipeline_flags = c.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
             });
 
@@ -210,15 +210,17 @@ pub const Renderer = struct {
                 },
             }, .{
                 .layout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .access_flags = c.VK_ACCESS_2_MEMORY_WRITE_BIT,
+                .access_flags = c.VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 .pipeline_flags = c.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
             }, .{
                 .layout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 .access_flags = c.VK_ACCESS_2_SHADER_READ_BIT,
-                .pipeline_flags = c.VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                .pipeline_flags = c.VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
             });
 
-            this.submit_oneshot_command_buffer(true, cmd_buf);
+            // it will be resetted by resetCommandPool
+            this.submit_oneshot_command_buffer(false, cmd_buf);
+            vk_check(c.vkDeviceWaitIdle(this.device.handle), "Failed to wait device idle");
             c.vmaDestroyBuffer(this.vk_allocator, staging_buffer.buffer, staging_buffer.allocation);
         }
         return allocation.handle;
@@ -383,7 +385,7 @@ pub const Renderer = struct {
                 },
                 .dest_info = .{
                     .layout = c.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    .access_flags = c.VK_ACCESS_2_MEMORY_READ_BIT,
+                    .access_flags = c.VK_ACCESS_2_TRANSFER_READ_BIT,
                     .pipeline_flags = c.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                 },
             },
@@ -399,7 +401,7 @@ pub const Renderer = struct {
                 .source_info = .{},
                 .dest_info = .{
                     .layout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    .access_flags = c.VK_ACCESS_2_MEMORY_WRITE_BIT,
+                    .access_flags = c.VK_ACCESS_2_TRANSFER_WRITE_BIT,
                     .pipeline_flags = c.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                 },
             },
@@ -466,7 +468,7 @@ pub const Renderer = struct {
             },
             .{
                 .layout = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                .access_flags = c.VK_ACCESS_2_MEMORY_WRITE_BIT,
+                .access_flags = c.VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 .pipeline_flags = c.VK_PIPELINE_STAGE_2_TRANSFER_BIT,
             },
             .{
@@ -476,7 +478,7 @@ pub const Renderer = struct {
             },
         );
         try render_state.end_frame(this.device);
-        try this.swapchain.present(this.device);
+        try this.swapchain.present(this.device, render_state.work_done_semaphore);
         this.current_render_state = (this.current_render_state + 1) % Renderer.FRAMES_IN_FLIGHT;
     }
 
@@ -846,7 +848,6 @@ pub const Renderer = struct {
         }}, null), "Failed to submit cbuffer");
 
         if (free_command_buffer) {
-            vk_check(c.vkDeviceWaitIdle(this.device.handle), "Failed to wait device idle");
             c.vkFreeCommandBuffers(this.device.handle, this.render_states[this.current_render_state].command_pool, 1, &[_]c.VkCommandBuffer{cmd_buf});
         }
     }
@@ -1195,7 +1196,12 @@ const Swapchain = struct {
         vk_check(c.vkGetSwapchainImagesKHR(device, swapchain_instance, &presentable_images, images.ptr), "Failed to get images from swapchain");
 
         var cmd_pool: c.VkCommandPool = undefined;
-        vk_check(c.vkCreateCommandPool(device, &c.VkCommandPoolCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = qfi }, null, &cmd_pool), "Failed to create command pool");
+        vk_check(c.vkCreateCommandPool(
+            device,
+            &c.VkCommandPoolCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO, .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = qfi },
+            null,
+            &cmd_pool,
+        ), "Failed to create command pool");
         defer c.vkDestroyCommandPool(device, cmd_pool, null);
 
         var cmd_buffers = [1]c.VkCommandBuffer{undefined};
@@ -1287,15 +1293,15 @@ const Swapchain = struct {
         this.current_image = image_index;
     }
 
-    fn present(this: *Swapchain, device: VkDevice) !void {
+    fn present(this: *Swapchain, device: VkDevice, wait_semaphore: c.VkSemaphore) !void {
         const present_info = c.VkPresentInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .pImageIndices = &[1]u32{this.current_image},
             .pResults = null,
             .pSwapchains = &[1]c.VkSwapchainKHR{this.handle.?},
             .swapchainCount = 1,
-            .pWaitSemaphores = null,
-            .waitSemaphoreCount = 0,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &[1]c.VkSemaphore{wait_semaphore},
         };
         vk_check(c.vkQueuePresentKHR(device.queue.handle, &present_info), "Failed to present image");
     }
@@ -1362,6 +1368,7 @@ const RenderState = struct {
 
     command_pool: c.VkCommandPool,
     work_done_fence: c.VkFence,
+    work_done_semaphore: c.VkSemaphore,
     main_command_buffer: c.VkCommandBuffer,
 
     render_target_allocator: RenderTargetAllocator,
@@ -1444,6 +1451,7 @@ const RenderState = struct {
         return .{
             .command_pool = command_pool,
             .work_done_fence = try make_fence(device.handle, true),
+            .work_done_semaphore = make_semaphore(device.handle),
             .main_command_buffer = command_buffer,
             .render_target_allocator = render_target_allocator,
             .vk_allocator = vk_allocator,
@@ -1460,15 +1468,45 @@ const RenderState = struct {
     fn start_frame(this: *RenderState, device: VkDevice) void {
         vk_check(c.vkWaitForFences(device.handle, 1, &[_]c.VkFence{this.work_done_fence}, c.VK_TRUE, std.math.maxInt(u64)), "Could not wait for work done fence");
         vk_check(c.vkResetFences(device.handle, 1, &[_]c.VkFence{this.work_done_fence}), "Could not reset work done fence");
-        const command_buffer_begin = c.VkCommandBufferBeginInfo{ .pNext = null, .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = 0, .pInheritanceInfo = null };
+        const command_buffer_begin = c.VkCommandBufferBeginInfo{
+            .pNext = null,
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = 0,
+            .pInheritanceInfo = null,
+        };
+        vk_check(c.vkResetCommandPool(device.handle, this.command_pool, c.VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT), "Failed to reset command pool");
 
         vk_check(c.vkBeginCommandBuffer(this.main_command_buffer, &[_]c.VkCommandBufferBeginInfo{command_buffer_begin}), "Failed to begin command buffer");
     }
 
     fn end_frame(this: *RenderState, device: VkDevice) !void {
         vk_check(c.vkEndCommandBuffer(this.main_command_buffer), "Failed to end main command buffer");
-        const cmd_buf_info = c.VkCommandBufferSubmitInfo{ .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .pNext = null, .deviceMask = 0, .commandBuffer = this.main_command_buffer };
-        const submit_info = c.VkSubmitInfo2{ .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2, .flags = 0, .waitSemaphoreInfoCount = 0, .pWaitSemaphoreInfos = null, .commandBufferInfoCount = 1, .pCommandBufferInfos = &[_]c.VkCommandBufferSubmitInfo{cmd_buf_info}, .signalSemaphoreInfoCount = 0, .pSignalSemaphoreInfos = null };
+        const cmd_buf_info = c.VkCommandBufferSubmitInfo{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
+            .pNext = null,
+            .deviceMask = 0,
+            .commandBuffer = this.main_command_buffer,
+        };
+
+        const semaphore_submit_info = [1]c.VkSemaphoreSubmitInfo{
+            c.VkSemaphoreSubmitInfo{
+                .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                .pNext = null,
+                .semaphore = this.work_done_semaphore,
+                .stageMask = c.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            },
+        };
+
+        const submit_info = c.VkSubmitInfo2{
+            .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
+            .flags = 0,
+            .waitSemaphoreInfoCount = 0,
+            .pWaitSemaphoreInfos = null,
+            .commandBufferInfoCount = 1,
+            .pCommandBufferInfos = &[_]c.VkCommandBufferSubmitInfo{cmd_buf_info},
+            .signalSemaphoreInfoCount = @intCast(semaphore_submit_info.len),
+            .pSignalSemaphoreInfos = &semaphore_submit_info,
+        };
         vk_check(c.vkQueueSubmit2(device.queue.handle, 1, &[_]c.VkSubmitInfo2{submit_info}, this.work_done_fence), "Failed to submit to main queue");
 
         try this.render_target_allocator.update(device);
@@ -1481,6 +1519,7 @@ const RenderState = struct {
         c.vmaDestroyBuffer(this.vk_allocator, this.textures_buffer, this.textures_mem_allocation);
 
         c.vkFreeCommandBuffers(device.handle, this.command_pool, 1, &[_]c.VkCommandBuffer{this.main_command_buffer});
+        c.vkDestroySemaphore(device.handle, this.work_done_semaphore, null);
         c.vkDestroyFence(device.handle, this.work_done_fence, null);
         c.vkDestroyCommandPool(device.handle, this.command_pool, null);
     }
@@ -1526,15 +1565,25 @@ fn vulkan_failure(message: []const u8) noreturn {
 
 fn make_fence(device: c.VkDevice, signaled: bool) !c.VkFence {
     var vk_fence: c.VkFence = undefined;
-    vk_check(c.vkCreateFence(device, &c.VkFenceCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = if (signaled)
-        c.VK_FENCE_CREATE_SIGNALED_BIT
-    else
-        0 }, null, &vk_fence), "Failed to create vulkan fence");
+    vk_check(c.vkCreateFence(
+        device,
+        &c.VkFenceCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = if (signaled)
+            c.VK_FENCE_CREATE_SIGNALED_BIT
+        else
+            0 },
+        null,
+        &vk_fence,
+    ), "Failed to create vulkan fence");
     return vk_fence;
 }
 
-// fn make_semaphore(device: Device) !vk.Semaphore {
-//     return try device.createSemaphore(&vk.SemaphoreCreateInfo{
-//         .s_type = vk.StructureType.semaphore_create_info,
-//     }, null);
-// }
+fn make_semaphore(device: c.VkDevice) c.VkSemaphore {
+    var semaphore: c.VkSemaphore = undefined;
+
+    vk_check(c.vkCreateSemaphore(device, &c.VkSemaphoreCreateInfo{
+        .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        .pNext = null,
+        .flags = 0,
+    }, null, &semaphore), "Could not create semaphore");
+    return semaphore;
+}
