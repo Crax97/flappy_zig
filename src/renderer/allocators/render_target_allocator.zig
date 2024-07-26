@@ -73,8 +73,8 @@ pub const RenderTargetAllocator = struct {
     }
 
     fn create_render_target(this: *RenderTargetAllocator, device: VkDevice, desc: RenderTargetDesc) !RenderTargetAllocation {
-        const attachment_usage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        const aspect_mask = c.VK_IMAGE_ASPECT_COLOR_BIT;
+        const attachment_usage = types.vk_attachment_usage(desc.format);
+        const aspect_mask = types.vk_aspect(desc.format);
         const image_desc = c.VkImageCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = null,

@@ -132,15 +132,13 @@ pub const TextureAllocator = struct {
 
         var usage: u32 = c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         if (description.flags.render_attachment) {
-            const attachment_bit = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+            const attachment_bit = types.vk_attachment_usage(description.format);
             usage |= attachment_bit;
         }
         if (description.flags.trasfer_src) {
             usage |= c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         }
-        const format = switch (description.format) {
-            .rgba_8 => c.VK_FORMAT_R8G8B8A8_UNORM,
-        };
+        const format = types.vk_format(description.format);
         const image_type = c.VK_IMAGE_TYPE_2D;
         const image_desc = c.VkImageCreateInfo{
             .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,

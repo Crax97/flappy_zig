@@ -78,6 +78,7 @@ pub const Buffer = struct {
 
 pub const TextureFormat = enum {
     rgba_8,
+    depth_32,
 };
 
 pub const TextureFlags = packed struct {
@@ -98,5 +99,19 @@ pub const BufferFlags = packed struct {
 pub fn vk_format(format: TextureFormat) c.VkFormat {
     return switch (format) {
         .rgba_8 => c.VK_FORMAT_R8G8B8A8_UNORM,
+        .depth_32 => c.VK_FORMAT_D32_SFLOAT,
+    };
+}
+
+pub fn vk_aspect(format: TextureFormat) c.VkImageAspectFlags {
+    return switch (format) {
+        .rgba_8 => c.VK_IMAGE_ASPECT_COLOR_BIT,
+        .depth_32 => c.VK_IMAGE_ASPECT_DEPTH_BIT,
+    };
+}
+pub fn vk_attachment_usage(format: TextureFormat) c.VkImageUsageFlags {
+    return switch (format) {
+        .rgba_8 => c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .depth_32 => c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
     };
 }

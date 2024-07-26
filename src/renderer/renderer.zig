@@ -32,6 +32,8 @@ const vec3 = math.vec3;
 
 const Camera2D = camera.Camera2D;
 
+const vk_format = types.vk_format;
+
 const shaders = struct {
     const DEFAULT_TEXTURE_VS = @embedFile("../spirv/default_textures.vert.spv");
     const DEFAULT_TEXTURE_FS = @embedFile("../spirv/default_fragment.frag.spv");
@@ -44,11 +46,9 @@ const INV_WORLD_SCALE: f32 = 1.0 / WORLD_SCALE;
 
 pub const Renderer = struct {
     const FRAMES_IN_FLIGHT = 3;
-    const INNER_WIDTH: u32 = 800;
-    const INNER_HEIGHT: u32 = 600;
 
-    const default_color_format = c.VK_FORMAT_R8G8B8A8_UNORM;
-    const default_depth_format = c.VK_FORMAT_D32_SFLOAT;
+    const default_color_format = vk_format(TextureFormat.rgba_8);
+    const default_depth_format = vk_format(TextureFormat.depth_32);
 
     instance: c.VkInstance,
     debug_utils: ?DebugUtilsMessengerExt,
@@ -184,7 +184,7 @@ pub const Renderer = struct {
         if (description.initial_bytes) |bytes| {
             // TODO: implement better copying strategy
             const texel_size_bytes = switch (description.format) {
-                .rgba_8 => 4,
+                .rgba_8, .depth_32 => 4,
             };
             const total_size_needed = description.width * description.height * description.depth * texel_size_bytes;
 
@@ -284,19 +284,28 @@ pub const Renderer = struct {
 
         try this.texture_allocator.flush_updates(this.device);
 
+        const width: u32 = @intFromFloat(viewport_extents.x());
+        const height: u32 = @intFromFloat(viewport_extents.y());
         const current_swapchain_img = this.swapchain.images[this.swapchain.current_image];
         const current_render_texture = try render_state.render_target_allocator.get(this.device, .{
-            .width = INNER_WIDTH,
-            .height = INNER_HEIGHT,
+            .width = width,
+            .height = height,
             .format = .rgba_8,
         });
+
+        const current_depth_attachment = try render_state.render_target_allocator.get(this.device, .{
+            .width = width,
+            .height = height,
+            .format = .depth_32,
+        });
+
         const rendering_info = c.VkRenderingInfo{
             .sType = c.VK_STRUCTURE_TYPE_RENDERING_INFO,
             .renderArea = c.VkRect2D{
                 .offset = .{},
                 .extent = c.VkExtent2D{
-                    .width = INNER_WIDTH,
-                    .height = INNER_HEIGHT,
+                    .width = @intFromFloat(viewport_extents.x()),
+                    .height = @intFromFloat(viewport_extents.y()),
                 },
             },
             .pColorAttachments = &[1]c.VkRenderingAttachmentInfo{
@@ -315,13 +324,23 @@ pub const Renderer = struct {
             },
             .colorAttachmentCount = 1,
             .layerCount = 1,
-            .pDepthAttachment = null,
+            .pDepthAttachment = &c.VkRenderingAttachmentInfo{
+                .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+                .imageView = current_depth_attachment.view,
+                .imageLayout = c.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                .clearValue = c.VkClearValue{
+                    .depthStencil = c.VkClearDepthStencilValue{
+                        .depth = 1.0,
+                    },
+                },
+            },
         };
 
         const cmd_buf = render_state.main_command_buffer;
 
-        quick_transition_image(
-            cmd_buf,
+        try quick_transition_images(cmd_buf, &[2]ImageTransition{
             .{
                 .image = current_render_texture.image,
                 .subresource = c.VkImageSubresourceRange{
@@ -331,14 +350,31 @@ pub const Renderer = struct {
                     .layerCount = 1,
                     .levelCount = 1,
                 },
+                .source_info = .{},
+                .dest_info = .{
+                    .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    .access_flags = c.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                    .pipeline_flags = c.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                },
             },
-            .{},
+
             .{
-                .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .access_flags = c.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                .pipeline_flags = c.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                .image = current_depth_attachment.image,
+                .subresource = c.VkImageSubresourceRange{
+                    .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT,
+                    .baseArrayLayer = 0,
+                    .baseMipLevel = 0,
+                    .layerCount = 1,
+                    .levelCount = 1,
+                },
+                .source_info = .{},
+                .dest_info = .{
+                    .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                    .access_flags = c.VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .pipeline_flags = c.VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | c.VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                },
             },
-        );
+        }, this.allocator);
         c.vkCmdBeginRendering(cmd_buf, &rendering_info);
 
         c.vkCmdBindPipeline(cmd_buf, c.VK_PIPELINE_BIND_POINT_GRAPHICS, this.default_texture_pipeline);
@@ -373,8 +409,8 @@ pub const Renderer = struct {
             1,
             &[1]c.VkViewport{
                 c.VkViewport{
-                    .width = @floatFromInt(INNER_WIDTH),
-                    .height = @floatFromInt(INNER_HEIGHT),
+                    .width = viewport_extents.x(),
+                    .height = viewport_extents.y(),
                     .minDepth = 0.0,
                     .maxDepth = 1.0,
                     .x = 0,
@@ -390,8 +426,8 @@ pub const Renderer = struct {
             &[1]c.VkRect2D{
                 c.VkRect2D{
                     .extent = c.VkExtent2D{
-                        .width = INNER_WIDTH,
-                        .height = INNER_HEIGHT,
+                        .width = width,
+                        .height = height,
                     },
                     .offset = .{
                         .x = 0,
@@ -453,8 +489,8 @@ pub const Renderer = struct {
                     .z = 0,
                 },
                 c.VkOffset3D{
-                    .x = @intCast(INNER_WIDTH),
-                    .y = @intCast(INNER_HEIGHT),
+                    .x = @intCast(width),
+                    .y = @intCast(height),
                     .z = 1,
                 },
             }, .srcSubresource = c.VkImageSubresourceLayers{
@@ -712,6 +748,7 @@ pub const Renderer = struct {
         indexing_features.runtimeDescriptorArray = c.VK_TRUE;
         indexing_features.descriptorBindingPartiallyBound = c.VK_TRUE;
         indexing_features.descriptorBindingSampledImageUpdateAfterBind = c.VK_TRUE;
+        indexing_features.shaderSampledImageArrayNonUniformIndexing = c.VK_TRUE;
 
         var features_2: c.VkPhysicalDeviceFeatures2 = std.mem.zeroes(c.VkPhysicalDeviceFeatures2);
         features_2.sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -972,7 +1009,7 @@ pub const Renderer = struct {
             .pNext = null,
             .colorAttachmentCount = 1,
             //.depthAttachmentFormat = Renderer.default_depth_format,
-            .depthAttachmentFormat = c.VK_FORMAT_UNDEFINED,
+            .depthAttachmentFormat = Renderer.default_depth_format,
             .pColorAttachmentFormats = &[1]c.VkFormat{Renderer.default_color_format},
             .stencilAttachmentFormat = 0,
             .viewMask = 0,

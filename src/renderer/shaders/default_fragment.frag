@@ -39,6 +39,6 @@ layout(location = 0) out vec4 color;
 
 void main() {
   TexData instance = base.data[inst_index];
-  vec4 tex_color = texture(tex2d_samplers[instance.tex_id], uv);
+  vec4 tex_color = texture(tex2d_samplers[nonuniformEXT(instance.tex_id)], uv);
   color = tex_color * instance.color;
 }
