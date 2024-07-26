@@ -50,7 +50,7 @@ const FlappyGame = struct {
                 .offset = Vec2.ZERO,
                 .extent = self.bird_texture.extents,
             },
-            .z_index = -1,
+            .z_index = -5,
         });
 
         try renderer.draw_rect(engine.renderer.RectDrawInfo{
