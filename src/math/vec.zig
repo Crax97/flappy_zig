@@ -3,7 +3,7 @@ const std = @import("std");
 const mat = @import("mat.zig");
 
 pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
-    return struct {
+    return extern struct {
         const This = @This();
         const F = scalar(T);
         const V = @Vector(N, T);
@@ -40,6 +40,25 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         pub fn w(this: *const This) T {
             if (N < 4) @compileError("Not enough elements!" ++ N);
             return this.data[3];
+        }
+
+        pub fn set_x(this: *This, value: T) void {
+            this.data[0] = value;
+        }
+
+        pub fn set_y(this: *This, value: T) void {
+            if (N < 2) @compileError("Not enough elements!" ++ N);
+            this.data[1] = value;
+        }
+
+        pub fn set_z(this: *This, value: T) void {
+            if (N < 3) @compileError("Not enough elements!" ++ N);
+            this.data[2] = value;
+        }
+
+        pub fn set_w(this: *This, value: T) void {
+            if (N < 4) @compileError("Not enough elements!" ++ N);
+            this.data[3] = value;
         }
 
         pub fn transform(this: *const This, transformation: mat.mat_t(T, N + 1)) vec_t(T, N + 1) {
