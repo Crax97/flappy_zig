@@ -8,7 +8,7 @@ const c = @import("../clibs.zig");
 const types = @import("types.zig");
 const camera = @import("camera.zig");
 
-const Window = @import("../window.zig").Window;
+const Window = @import("../engine/window.zig").Window;
 const Allocator = std.mem.Allocator;
 
 const Texture = types.Texture;
@@ -24,6 +24,7 @@ const TextureAllocator = ta.TextureAllocator;
 const TextureAllocation = ta.TextureAllocation;
 
 const Vec2 = math.Vec2;
+const Vec4 = math.Vec4;
 const Mat4 = math.Mat4;
 const Rect2 = math.Rect2;
 
@@ -38,6 +39,9 @@ const shaders = struct {
 
 const required_device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
 
+const WORLD_SCALE: f32 = 100.0;
+const INV_WORLD_SCALE: f32 = 1.0 / WORLD_SCALE;
+
 pub const Renderer = struct {
     const FRAMES_IN_FLIGHT = 3;
     const INNER_WIDTH: u32 = 800;
@@ -50,6 +54,7 @@ pub const Renderer = struct {
     debug_utils: ?DebugUtilsMessengerExt,
     allocator: Allocator,
     vk_allocator: c.VmaAllocator,
+    window: *Window,
 
     surface: c.VkSurfaceKHR,
     physical_device: VkPhysicalDevice,
@@ -61,6 +66,8 @@ pub const Renderer = struct {
     render_list: RenderList,
     texture_allocator: TextureAllocator,
     sampler_allocator: sampler_allocator.SamplerAllocator,
+
+    white_texture: TextureHandle = undefined,
 
     default_texture_pipeline_layout: c.VkPipelineLayout,
     default_texture_pipeline: c.VkPipeline,
@@ -108,7 +115,7 @@ pub const Renderer = struct {
 
         const pipeline_layout = create_pipeline_layout(device, &texture_allocator);
 
-        return .{
+        var inst = Renderer{
             .instance = instance,
             .allocator = allocator,
             .vk_allocator = vk_allocator,
@@ -126,7 +133,23 @@ pub const Renderer = struct {
 
             .default_texture_pipeline_layout = pipeline_layout,
             .default_texture_pipeline = try create_default_texture_graphics_pipeline(device, pipeline_layout),
+
+            .window = window,
         };
+
+        try inst.create_defaults();
+
+        return inst;
+    }
+
+    fn create_defaults(this: *Renderer) !void {
+        this.white_texture = try this.alloc_texture(.{
+            .width = 1,
+            .height = 1,
+            .format = .rgba_8,
+            .initial_bytes = &.{ 255, 255, 255, 255 },
+            .sampler_config = types.SamplerConfig.NEAREST,
+        });
     }
 
     pub fn deinit(this: *Renderer) void {
@@ -134,6 +157,8 @@ pub const Renderer = struct {
         for (0..Renderer.FRAMES_IN_FLIGHT) |i| {
             this.render_states[i].deinit(this.device);
         }
+
+        this.free_texture(this.white_texture);
 
         c.vkDestroyPipeline(this.device.handle, this.default_texture_pipeline, null);
         c.vkDestroyPipelineLayout(this.device.handle, this.default_texture_pipeline_layout, null);
@@ -241,9 +266,21 @@ pub const Renderer = struct {
         try this.render_list.textures.append(draw_info);
     }
 
-    pub fn render(this: *Renderer) !void {
+    pub fn draw_rect(this: *Renderer, draw_info: RectDrawInfo) !void {
+        try this.draw_texture(TextureDrawInfo{
+            .texture = this.white_texture,
+            .position = draw_info.rect.offset,
+            .scale = draw_info.rect.extent,
+            .color = draw_info.color,
+            .region = Rect2{ .offset = Vec2.ZERO, .extent = Vec2.ONE },
+            .rotation = draw_info.rotation,
+            .z_index = draw_info.z_index,
+        });
+    }
+
+    pub fn render(this: *Renderer, viewport_extents: Vec2) !void {
         var render_state = &this.render_states[this.current_render_state];
-        this.update_primitive_buffers(render_state);
+        this.update_primitive_buffers(render_state, viewport_extents);
 
         try this.texture_allocator.flush_updates(this.device);
 
@@ -482,7 +519,11 @@ pub const Renderer = struct {
         this.current_render_state = (this.current_render_state + 1) % Renderer.FRAMES_IN_FLIGHT;
     }
 
-    fn update_primitive_buffers(this: *const Renderer, render_state: *RenderState) void {
+    fn update_primitive_buffers(
+        this: *const Renderer,
+        render_state: *RenderState,
+        viewport_extents: Vec2,
+    ) void {
         {
             var buffer_alloc_info: c.VmaAllocationInfo = undefined;
             c.vmaGetAllocationInfo(this.vk_allocator, render_state.textures_mem_allocation, &buffer_alloc_info);
@@ -499,7 +540,7 @@ pub const Renderer = struct {
             const data: [*]RenderState.RenderPOV = @ptrCast(@alignCast(buffer_alloc_info.pMappedData.?));
 
             data[0] = RenderState.RenderPOV{
-                .projection_matrix = this.camera.projection_matrix(math.vec2(800, 600)),
+                .projection_matrix = this.camera.projection_matrix(viewport_extents),
                 .view_matrix = this.camera.view_matrix(),
             };
         }
@@ -1308,21 +1349,23 @@ const Swapchain = struct {
 };
 
 pub const TextureDrawInfo = struct {
-    const GpuData = struct {
+    const GpuData = extern struct {
         transform_matrix: Mat4,
-        offset_extent_px: [4]f32 align(1),
-        tex_id: u32 align(1),
-        _pad_0: u32 align(1) = 0,
-        _pad_1: u32 align(1) = 0,
-        _pad_2: u32 align(1) = 0,
+        offset_extent_px: Vec4,
+        color: Vec4,
+        tex_id: u32,
+        _pad_0: u32 = 0,
+        _pad_1: u32 = 0,
+        _pad_2: u32 = 0,
 
         fn from(info: TextureDrawInfo) GpuData {
             const arr_off = info.region.offset.data;
             const arr_ext = info.region.extent.data;
 
             return .{
-                .transform_matrix = math.transformation(info.position.extend(@floatFromInt(info.z_index)), info.scale.mul(info.region.extent).extend(1.0), vec3(0.0, 0.0, info.rotation)),
-                .offset_extent_px = .{ arr_off[0], arr_off[1], arr_ext[0], arr_ext[1] },
+                .transform_matrix = math.transformation(info.position.scale(INV_WORLD_SCALE).extend(@floatFromInt(info.z_index)), info.scale.mul(info.region.extent).extend(1.0), vec3(0.0, 0.0, info.rotation)),
+                .offset_extent_px = math.vec4(arr_off[0], arr_off[1], arr_ext[0], arr_ext[1]),
+                .color = info.color,
                 .tex_id = info.texture.id,
             };
         }
@@ -1336,8 +1379,16 @@ pub const TextureDrawInfo = struct {
     texture: TextureHandle,
     position: Vec2,
     scale: Vec2 = Vec2.ONE,
+    color: Vec4 = Vec4.ONE,
     region: Rect2,
     rotation: f32 = 0.0,
+    z_index: i32 = 0,
+};
+
+pub const RectDrawInfo = struct {
+    rect: Rect2,
+    rotation: f32 = 0.0,
+    color: Vec4 = Vec4.ONE,
     z_index: i32 = 0,
 };
 

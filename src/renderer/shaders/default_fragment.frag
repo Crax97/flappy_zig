@@ -7,6 +7,7 @@
 struct TexData {
   mat4 transform;
   vec4 offset_extent_px;
+  vec4 color;
   uint tex_id;
 };
 
@@ -39,7 +40,5 @@ layout(location = 0) out vec4 color;
 void main() {
   TexData instance = base.data[inst_index];
   vec4 tex_color = texture(tex2d_samplers[instance.tex_id], uv);
-  color = tex_color;
-
-  // color = vec4(1.0, 0.0, 0.0, 1.0);
+  color = tex_color * instance.color;
 }

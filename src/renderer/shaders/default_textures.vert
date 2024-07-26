@@ -7,6 +7,7 @@
 struct TexData {
   mat4 transform;
   vec4 offset_extent_px;
+  vec4 color;
   uint tex_id;
 };
 
