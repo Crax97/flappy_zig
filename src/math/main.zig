@@ -5,8 +5,51 @@ const mat = @import("mat.zig");
 
 fn rect_t(comptime T: type, comptime N: comptime_int) type {
     return struct {
-        offset: vec.vec_t(T, N),
-        extent: vec.vec_t(T, N),
+        const This = @This();
+        const Vec = vec.vec_t(T, N);
+        offset: Vec,
+        extent: Vec,
+
+        pub fn points(this: *const This) [4 * (N - 1)]Vec {
+            const NP = 4 * (N - 1);
+            var pts = std.mem.zeroes([NP]Vec);
+            if (N == 2) {
+                pts[0] = vec2(this.offset.x() - this.extent.x() * 0.5, this.offset.y() - this.extent.y() * 0.5);
+                pts[1] = vec2(this.offset.x() - this.extent.x() * 0.5, this.offset.y() + this.extent.y() * 0.5);
+                pts[2] = vec2(this.offset.x() + this.extent.x() * 0.5, this.offset.y() - this.extent.y() * 0.5);
+                pts[3] = vec2(this.offset.x() + this.extent.x() * 0.5, this.offset.y() + this.extent.y() * 0.5);
+            }
+
+            if (N == 3) {
+                @compileError("TODO");
+            }
+
+            if (N > 4) {
+                @compileError("TODO");
+            }
+
+            return pts;
+        }
+
+        pub fn contains(this: *const This, pt: Vec) bool {
+            inline for (0..N) |i| {
+                if (this.offset.data[i] - this.extent.data[i] * 0.5 > pt.data[i] or this.offset.data[i] + this.extent.data[i] * 0.5 < pt.data[i]) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        pub fn intersects(this: *const This, other: This) bool {
+            const pts = other.points();
+            inline for (pts) |pt| {
+                if (this.contains(pt)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     };
 }
 
@@ -48,8 +91,8 @@ pub fn transformation(location: Vec3, scale: Vec3, rotation_euler: Vec3) Mat4 {
     const r = rot_x(rotation_euler.x())
         .mul(rot_y(rotation_euler.y())
         .mul(rot_z(rotation_euler.z())));
-    return r.mul(translation(location))
-        .mul(scaling(scale));
+    return r.mul(scaling(scale))
+        .mul(translation(location));
 }
 
 pub fn translation(location: Vec3) Mat4 {

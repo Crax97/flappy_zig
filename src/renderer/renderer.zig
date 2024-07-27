@@ -41,7 +41,7 @@ const shaders = struct {
 
 const required_device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
 
-const WORLD_SCALE: f32 = 100.0;
+const WORLD_SCALE: f32 = 1.0;
 const INV_WORLD_SCALE: f32 = 1.0 / WORLD_SCALE;
 
 pub const Renderer = struct {
