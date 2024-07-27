@@ -15,8 +15,22 @@ pub fn build(b: *std.Build) !void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const exe = try create_executable(b, target, optimize);
-    const check = try create_executable(b, target, optimize);
+    const exe = b.addExecutable(.{
+        .name = "gamefun",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    const check = b.addExecutable(.{
+        .name = "gamefun",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    try setup_compile(exe, b, target);
+    try setup_compile(check, b, target);
 
     // Shaders
     try build_shaders(b, exe);
@@ -59,6 +73,8 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    try setup_compile(unit_tests, b, target);
+    unit_tests.linkLibC();
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
@@ -67,14 +83,7 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&run_unit_tests.step);
 }
 
-fn create_executable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) !*std.Build.Step.Compile {
-    const exe = b.addExecutable(.{
-        .name = "gamefun",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
+fn setup_compile(exe: *std.Build.Step.Compile, b: *std.Build, target: std.Build.ResolvedTarget) !void {
 
     // Some libs are c++ libs
     exe.linkLibCpp();
@@ -108,8 +117,6 @@ fn create_executable(b: *std.Build, target: std.Build.ResolvedTarget, optimize: 
     // VMA
     exe.addIncludePath(b.path("thirdparty/vma/include"));
     exe.addCSourceFile(.{ .file = b.path("src/vma.cpp") });
-
-    return exe;
 }
 
 fn build_shaders(b: *std.Build, exe: *std.Build.Step.Compile) !void {

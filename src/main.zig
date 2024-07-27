@@ -1,10 +1,10 @@
 const std = @import("std");
 const c = @import("clibs.zig");
 const gen_arena = @import("gen_arena.zig");
-const world = @import("ecs/world.zig");
-const ComponentBegin = @import("ecs/component.zig").ComponentBegin;
-const ComponentUpdate = @import("ecs/component.zig").ComponentUpdate;
-const ComponentDestroyed = @import("ecs/component.zig").ComponentDestroyed;
+const ecs = @import("ecs/ecs.zig");
+const ComponentBegin = ecs.ComponentBegin;
+const ComponentUpdate = ecs.ComponentUpdate;
+const ComponentDestroyed = ecs.ComponentDestroyed;
 const window = @import("engine/window.zig");
 const sdl_util = @import("sdl_util.zig");
 const engine = @import("engine/engine.zig");
@@ -15,64 +15,81 @@ const Rect2 = math.Rect2;
 const vec2 = math.vec2;
 
 const TextureHandle = engine.TextureHandle;
+const Engine = engine.Engine;
+const EntityID = ecs.EntityID;
+const ComponentHandle = ecs.ComponentHandle;
 
 const SDL = @import("clibs.zig");
 
-const World = world.World;
+const World = ecs.World;
 
 var rand_gen: std.Random = undefined;
 var running: bool = true;
 
 const FlappyGame = struct {
+    pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
+        _ = self;
+        var bird_entity = try engine_inst.world.new_entity();
+        try bird_entity.add_component(Bird{});
+
+        var pipe_manager = try engine_inst.world.new_entity();
+        try pipe_manager.add_component(PipeManager.new(bird_entity.id()));
+    }
+    pub fn update(self: *FlappyGame, engine_inst: *engine.Engine, delta_seconds: f64) anyerror!void {
+        _ = self;
+        _ = engine_inst;
+        _ = delta_seconds;
+    }
+    pub fn end(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
+        _ = self;
+        _ = engine_inst;
+    }
+};
+
+const Bird = struct {
     const SPEED: f32 = 100.0;
     bird_texture: TextureInfo = undefined,
-    pear_texture: TextureInfo = undefined,
     velocity: Vec2 = Vec2.ZERO,
     pos: Vec2 = Vec2.ZERO,
     rot: f32 = 0.0,
-    pipe_manager: PipeManager = .{},
-    pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        try self.pipe_manager.init();
-        self.bird_texture = try load_texture_from_file(engine_inst, "./assets/apple.png");
-        self.pear_texture = try load_texture_from_file(engine_inst, "./assets/pear.png");
+
+    pub fn begin(this: *Bird, ctx: ComponentBegin) anyerror!void {
+        this.bird_texture = try load_texture_from_file(ctx.world.engine(), "./assets/apple.png");
     }
-    pub fn update(self: *FlappyGame, engine_inst: *engine.Engine, delta_seconds: f64) anyerror!void {
-        var renderer = &engine_inst.renderer;
+
+    pub fn update(this: *Bird, ctx: ComponentUpdate) anyerror!void {
+        var renderer = &ctx.world.engine().renderer;
         if (engine.Input.is_key_just_down(SDL.SDL_SCANCODE_R)) {
-            try self.pipe_manager.init();
-            self.pos = Vec2.ZERO;
-            self.velocity = Vec2.ZERO;
+            this.pos = Vec2.ZERO;
+            this.velocity = Vec2.ZERO;
             running = true;
         }
         if (engine.Input.is_key_down(c.SDL_SCANCODE_SPACE) and running) {
-            self.velocity.set_y(-5.0);
+            this.velocity.set_y(-5.0);
         }
 
-        self.velocity.set_y(self.velocity.y() + @as(f32, @floatCast(delta_seconds)) * 10.0);
-        self.pos = self.pos.add(self.velocity);
+        this.velocity.set_y(this.velocity.y() + @as(f32, @floatCast(ctx.delta_time)) * 10.0);
+        this.pos = this.pos.add(this.velocity);
 
-        if (self.pos.y() < -400.0 or self.pos.y() > 400.0) {
-            self.pos.set_y(std.math.clamp(self.pos.y(), -400.0, 400.0));
+        if (this.pos.y() < -400.0 or this.pos.y() > 400.0) {
+            this.pos.set_y(std.math.clamp(this.pos.y(), -400.0, 400.0));
             running = false;
         }
 
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
-            .texture = self.bird_texture.handle,
-            .position = self.pos,
-            .rotation = self.rot,
+            .texture = this.bird_texture.handle,
+            .position = this.pos,
+            .rotation = this.rot,
             .scale = Vec2.ONE,
             .region = Rect2{
                 .offset = Vec2.ZERO,
-                .extent = self.bird_texture.extents,
+                .extent = this.bird_texture.extents,
             },
             .z_index = -5,
         });
-
-        try self.pipe_manager.update(engine_inst, delta_seconds, self.pos);
     }
-    pub fn end(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        engine_inst.renderer.free_texture(self.pear_texture.handle);
-        engine_inst.renderer.free_texture(self.bird_texture.handle);
+    pub fn destroyed(self: *Bird, ctx: ComponentDestroyed) anyerror!void {
+        ctx.world.engine().renderer.free_texture(self.bird_texture.handle);
     }
 };
 
@@ -93,9 +110,18 @@ const PipeManager = struct {
         .{},
         .{},
     },
+    player: EntityID,
+    bird: ComponentHandle(Bird) = undefined,
 
-    fn new() PipeManager {
-        return .{};
+    fn new(player: EntityID) PipeManager {
+        return .{
+            .player = player,
+        };
+    }
+
+    pub fn begin(this: *PipeManager, ctx: ComponentBegin) anyerror!void {
+        try this.init();
+        this.bird = ctx.world.get_component(Bird, this.player).?;
     }
 
     fn init(this: *PipeManager) !void {
@@ -111,7 +137,10 @@ const PipeManager = struct {
         pipe.hit = false;
     }
 
-    fn update(this: *PipeManager, engine_inst: *engine.Engine, delta_secs: f64, player_pos: Vec2) !void {
+    pub fn update(this: *PipeManager, ctx: ComponentUpdate) !void {
+        const player_pos = this.bird.get().pos;
+        const delta_secs = ctx.delta_time;
+        var engine_inst = ctx.world.engine();
         for (&this.pipes) |*pipe| {
             if (running) {
                 pipe.pos.set_x(pipe.pos.x() - PIPE_SPEED * @as(f32, @floatCast(delta_secs)));
@@ -221,8 +250,8 @@ pub fn main() !void {
     rand_gen = rand.random();
 
     var engine_instance = try engine.Engine.init(.{
-        .width = 400,
-        .height = 600,
+        .width = 800,
+        .height = 1200,
         .name = "Flappy Game",
     }, allocator);
     defer engine_instance.deinit();

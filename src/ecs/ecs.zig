@@ -68,7 +68,7 @@ const vec3 = struct {
 const BulletComponent = struct {
     direction: vec3,
     id: u32,
-    lifetime: f32 = 10.0,
+    lifetime: f64 = 10.0,
     pub fn begin(this: *BulletComponent, ctx: ComponentBegin) anyerror!void {
         _ = this;
         _ = ctx;
@@ -85,8 +85,8 @@ const BulletComponent = struct {
 };
 
 const BulletSpawnerComponent = struct {
-    spawn_timer: f32,
-    current_time: f32 = 0,
+    spawn_timer: f64,
+    current_time: f64 = 0,
     id_counter: u32 = 0,
     pub fn begin(this: *BulletSpawnerComponent, ctx: ComponentBegin) anyerror!void {
         _ = ctx;

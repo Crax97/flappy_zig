@@ -49,6 +49,8 @@ pub const Engine = struct {
     window: window.Window,
     renderer: renderer.Renderer,
     running: bool = true,
+    world: World,
+
     pub fn init(window_config: window.WindowConfig, allocator: std.mem.Allocator) !Engine {
         if (c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_JOYSTICK | c.SDL_INIT_GAMECONTROLLER | c.SDL_INIT_TIMER) != 0) {
             sdl_util.sdl_panic();
@@ -59,7 +61,11 @@ pub const Engine = struct {
 
         try input.init(allocator);
 
-        return .{ .window = win, .renderer = renderer_instance };
+        return .{
+            .window = win,
+            .renderer = renderer_instance,
+            .world = try World.init(allocator),
+        };
     }
 
     pub fn deinit(this: *Engine) void {
@@ -69,8 +75,16 @@ pub const Engine = struct {
         c.SDL_Quit();
     }
 
+    pub fn get_world(this: *Engine) *World {
+        return &this.world;
+    }
+
     pub fn run_loop(this: *Engine, game: Game) !void {
         try game.init(game.target, this);
+
+        this.world.set_engine(this);
+
+        try this.world.begin();
         while (this.running) {
             var event: c.SDL_Event = undefined;
             while (c.SDL_PollEvent(&event) != 0) {
@@ -86,11 +100,13 @@ pub const Engine = struct {
             input.update();
             try this.renderer.start_rendering();
             try game.update(game.target, this, time.delta_seconds());
+            try this.world.update(time.delta_seconds());
             try this.renderer.render(this.window.viewport_extents());
             input.end_frame();
             time.end_frame();
         }
 
+        try this.world.destroy();
         try game.end(game.target, this);
     }
 };

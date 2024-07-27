@@ -53,7 +53,7 @@ pub const ComponentDestroyed = struct {
 pub const ComponentUpdate = struct {
     world: *World,
     entity: EntityID,
-    delta_time: f32,
+    delta_time: f64,
 };
 pub const ComponentVTable = struct {
     begin: ?*const fn (self: *anyopaque, ctx: ComponentBegin) anyerror!void,
@@ -88,7 +88,7 @@ pub const ComponentVTable = struct {
         comptime var destroyed: ?*const fn (self: *anyopaque, ctx: ComponentDestroyed) anyerror!void = null;
         comptime if (@hasDecl(T, "destroyed")) {
             destroyed = &(struct {
-                fn destroyed_fn(self_erased: *anyopaque, ctx: ComponentBegin) anyerror!void {
+                fn destroyed_fn(self_erased: *anyopaque, ctx: ComponentDestroyed) anyerror!void {
                     const self: *T = @ptrCast(@alignCast(self_erased));
                     return self.destroyed(ctx);
                 }
@@ -137,7 +137,7 @@ pub const ComponentArenaVTable = struct {
     update_all_fn: *const fn (
         arena: *ErasedArena,
         context: *World,
-        delta_time: f32,
+        delta_time: f64,
     ) anyerror!void,
     destroy_all_fn: *const fn (arena: *ErasedArena, context: *World) anyerror!void,
 
@@ -166,7 +166,7 @@ pub const ComponentArenaVTable = struct {
                     });
                 }
             }
-            fn update_all(arena: *ErasedArena, world: *World, dt: f32) anyerror!void {
+            fn update_all(arena: *ErasedArena, world: *World, dt: f64) anyerror!void {
                 var arena_interator = arena.iterator(T);
                 while (arena_interator.next()) |value| {
                     try value.update(ComponentUpdate{

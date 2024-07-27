@@ -14,6 +14,7 @@ const ComponentArenaVTable = component_mod.ComponentArenaVTable;
 
 const ErasedArena = gen_arena.ErasedArena;
 const Allocator = std.mem.Allocator;
+const Engine = @import("../engine/engine.zig").Engine;
 
 const type_id = util.type_id;
 
@@ -101,6 +102,7 @@ pub const World = struct {
     allocator: Allocator,
     entities: Entities,
     new_entities: NewEntities,
+    engine_inst: ?*Engine,
 
     pub fn init(allocator: Allocator) Allocator.Error!World {
         return .{
@@ -108,6 +110,7 @@ pub const World = struct {
             .allocator = allocator,
             .entities = try Entities.init(allocator),
             .new_entities = NewEntities.init(allocator),
+            .engine_inst = null,
         };
     }
 
@@ -135,6 +138,14 @@ pub const World = struct {
         this.new_entities.deinit();
     }
 
+    pub fn set_engine(this: *World, engine_inst: *Engine) void {
+        this.engine_inst = engine_inst;
+    }
+
+    pub fn engine(this: *World) *Engine {
+        return this.engine_inst.?;
+    }
+
     pub fn new_entity(this: *World) Allocator.Error!SpawnEntity {
         return SpawnEntity.new(this);
     }
@@ -146,7 +157,7 @@ pub const World = struct {
         }
     }
 
-    pub fn update(this: *World, dt: f32) anyerror!void {
+    pub fn update(this: *World, dt: f64) anyerror!void {
         try this.spawn_new_entities();
         var iter = this.storage.iterator();
         while (iter.next()) |storage| {
