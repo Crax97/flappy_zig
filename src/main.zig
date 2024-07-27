@@ -52,17 +52,20 @@ const Bird = struct {
     velocity: Vec2 = Vec2.ZERO,
     pos: Vec2 = Vec2.ZERO,
     rot: f32 = 0.0,
+    reset: bool = true,
 
     pub fn begin(this: *Bird, ctx: ComponentBegin) anyerror!void {
         this.bird_texture = try load_texture_from_file(ctx.world.engine(), "./assets/apple.png");
     }
 
     pub fn update(this: *Bird, ctx: ComponentUpdate) anyerror!void {
+        this.reset = false;
         var renderer = &ctx.world.engine().renderer;
         if (engine.Input.is_key_just_down(SDL.SDL_SCANCODE_R)) {
             this.pos = Vec2.ZERO;
             this.velocity = Vec2.ZERO;
             running = true;
+            this.reset = true;
         }
         if (engine.Input.is_key_down(c.SDL_SCANCODE_SPACE) and running) {
             this.velocity.set_y(-5.0);
@@ -138,9 +141,15 @@ const PipeManager = struct {
     }
 
     pub fn update(this: *PipeManager, ctx: ComponentUpdate) !void {
-        const player_pos = this.bird.get().pos;
+        const bird = this.bird.get();
+        const player_pos = bird.pos;
         const delta_secs = ctx.delta_time;
         var engine_inst = ctx.world.engine();
+
+        if (bird.reset) {
+            try this.init();
+        }
+
         for (&this.pipes) |*pipe| {
             if (running) {
                 pipe.pos.set_x(pipe.pos.x() - PIPE_SPEED * @as(f32, @floatCast(delta_secs)));
