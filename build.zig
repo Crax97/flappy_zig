@@ -4,6 +4,7 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) !void {
+
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -117,6 +118,10 @@ fn setup_compile(exe: *std.Build.Step.Compile, b: *std.Build, target: std.Build.
     // VMA
     exe.addIncludePath(b.path("thirdparty/vma/include"));
     exe.addCSourceFile(.{ .file = b.path("src/vma.cpp") });
+
+    // Freetype
+    const b_freetype = b.dependency("freetype", .{});
+    exe.linkLibrary(b_freetype.artifact("freetype"));
 }
 
 fn build_shaders(b: *std.Build, exe: *std.Build.Step.Compile) !void {

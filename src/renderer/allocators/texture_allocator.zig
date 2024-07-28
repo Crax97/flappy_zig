@@ -167,12 +167,34 @@ pub const TextureAllocator = struct {
         var allocation = std.mem.zeroes(c.VmaAllocation);
         vk_check(c.vmaCreateImage(this.vk_allocator, &image_desc, &mem_alloc_info, &image, &allocation, null), "Failed to create image through vma");
 
-        const image_view_desc = c.VkImageViewCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .pNext = null, .image = image, .format = format, .flags = 0, .components = c.VkComponentMapping{
+        const swizzle = if (description.format == .r_8) c.VkComponentMapping{
+            .r = c.VK_COMPONENT_SWIZZLE_R,
+            .g = c.VK_COMPONENT_SWIZZLE_R,
+            .b = c.VK_COMPONENT_SWIZZLE_R,
+            .a = c.VK_COMPONENT_SWIZZLE_R,
+        } else c.VkComponentMapping{
             .r = c.VK_COMPONENT_SWIZZLE_R,
             .g = c.VK_COMPONENT_SWIZZLE_G,
             .b = c.VK_COMPONENT_SWIZZLE_B,
             .a = c.VK_COMPONENT_SWIZZLE_A,
-        }, .viewType = c.VK_IMAGE_VIEW_TYPE_2D, .subresourceRange = c.VkImageSubresourceRange{ .layerCount = 1, .levelCount = 1, .baseMipLevel = 0, .baseArrayLayer = 0, .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT } };
+        };
+
+        const image_view_desc = c.VkImageViewCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .image = image,
+            .format = format,
+            .flags = 0,
+            .components = swizzle,
+            .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+            .subresourceRange = c.VkImageSubresourceRange{
+                .layerCount = 1,
+                .levelCount = 1,
+                .baseMipLevel = 0,
+                .baseArrayLayer = 0,
+                .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+            },
+        };
         var image_view = std.mem.zeroes(c.VkImageView);
         vk_check(c.vkCreateImageView(device.handle, &image_view_desc, null, &image_view), "Could not create image view");
 

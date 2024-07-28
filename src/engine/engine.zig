@@ -5,11 +5,15 @@ const input = @import("input.zig");
 const window = @import("window.zig");
 const time = @import("time.zig");
 const ecs = @import("../ecs/ecs.zig");
-
+const fonts = @import("fonts.zig");
 pub const renderer = @import("../renderer/main.zig");
 
 pub const World = ecs.World;
 pub const TextureHandle = renderer.TextureHandle;
+
+pub const FontManager = fonts.FontManager;
+pub const FontHandle = fonts.FontHandle;
+pub const FontDescription = fonts.FontDescription;
 
 pub const Texture = renderer.Texture;
 
@@ -48,6 +52,7 @@ pub const Game = struct {
 pub const Engine = struct {
     window: window.Window,
     renderer: renderer.Renderer,
+    font_manager: FontManager,
     running: bool = true,
     world: World,
 
@@ -64,12 +69,14 @@ pub const Engine = struct {
         return .{
             .window = win,
             .renderer = renderer_instance,
+            .font_manager = try FontManager.init(allocator),
             .world = try World.init(allocator),
         };
     }
 
     pub fn deinit(this: *Engine) void {
         input.deinit();
+        this.font_manager.deinit(&this.renderer);
         this.renderer.deinit();
         this.window.deinit();
         c.SDL_Quit();

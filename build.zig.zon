@@ -23,8 +23,8 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .zmath = .{
-            .path = "thirdparty/zmath",
+        .freetype = .{
+            .path = "thirdparty/zig-freetype",
         },
 
         // See `zig fetch --save <url>` for a command-line interface for adding dependencies.

@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("clibs.zig");
+const ft = @import("freetype.zig");
 const gen_arena = @import("gen_arena.zig");
 const ecs = @import("ecs/ecs.zig");
 const ComponentBegin = ecs.ComponentBegin;
@@ -23,22 +24,37 @@ const SDL = @import("clibs.zig");
 
 const World = ecs.World;
 
+const droid_sans_mono = @embedFile("DroidSansMono.ttf");
+
 var rand_gen: std.Random = undefined;
 var running: bool = true;
+var points: u32 = 0;
 
 const FlappyGame = struct {
+    font: engine.FontHandle = undefined,
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
-        _ = self;
         var bird_entity = try engine_inst.world.new_entity();
         try bird_entity.add_component(Bird{});
 
         var pipe_manager = try engine_inst.world.new_entity();
         try pipe_manager.add_component(PipeManager.new(bird_entity.id()));
+
+        self.font = try engine_inst.font_manager.load(engine.FontDescription{
+            .size = 24,
+            .data = droid_sans_mono,
+        });
     }
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine, delta_seconds: f64) anyerror!void {
-        _ = self;
-        _ = engine_inst;
         _ = delta_seconds;
+        try engine_inst.font_manager.render_text_formatted(
+            &engine_inst.renderer,
+            "Points {d}",
+            .{points},
+            .{
+                .font = self.font,
+                .offset = vec2(-200.0, -300.0),
+            },
+        );
     }
     pub fn end(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
         _ = self;
@@ -65,6 +81,7 @@ const Bird = struct {
             this.pos = Vec2.ZERO;
             this.velocity = Vec2.ZERO;
             running = true;
+            points = 0;
             this.reset = true;
         }
         if (engine.Input.is_key_down(c.SDL_SCANCODE_SPACE) and running) {
@@ -88,7 +105,7 @@ const Bird = struct {
                 .offset = Vec2.ZERO,
                 .extent = this.bird_texture.extents,
             },
-            .z_index = -5,
+            .z_index = -10,
         });
     }
     pub fn destroyed(self: *Bird, ctx: ComponentDestroyed) anyerror!void {
@@ -195,7 +212,7 @@ const PipeManager = struct {
                 .offset = player_pos,
                 .extent = vec2(32.0, 32.0),
             }) and !pipe.hit) {
-                std.debug.print("Point!\n", .{});
+                points += 1;
                 pipe.hit = true;
             }
 
@@ -203,11 +220,13 @@ const PipeManager = struct {
             try renderer.draw_rect(engine.renderer.RectDrawInfo{
                 .color = color_1,
                 .rect = rect_1,
+                .z_index = -15,
             });
 
             try renderer.draw_rect(engine.renderer.RectDrawInfo{
                 .color = color_2,
                 .rect = rect_2,
+                .z_index = -15,
             });
         }
     }
@@ -250,6 +269,12 @@ fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!Textu
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
+
+    var lib: ft.FT_Library = undefined;
+    const err = ft.FT_Init_FreeType(&lib);
+    if (err != ft.FT_Err_Ok) {
+        std.debug.panic("Freetype err", .{});
+    }
 
     var rand = std.rand.DefaultPrng.init(blk: {
         var seed: u64 = undefined;

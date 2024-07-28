@@ -183,7 +183,8 @@ pub const Renderer = struct {
         const allocation = try this.texture_allocator.alloc_texture(this.device, &this.sampler_allocator, description);
         if (description.initial_bytes) |bytes| {
             // TODO: implement better copying strategy
-            const texel_size_bytes = switch (description.format) {
+            const texel_size_bytes: u32 = switch (description.format) {
+                .r_8 => 1,
                 .rgba_8, .depth_32 => 4,
             };
             const total_size_needed = description.width * description.height * description.depth * texel_size_bytes;
@@ -555,6 +556,12 @@ pub const Renderer = struct {
         this.current_render_state = (this.current_render_state + 1) % Renderer.FRAMES_IN_FLIGHT;
     }
 
+    fn sort_texture_draw_info(ctx: void, a: TextureDrawInfo, b: TextureDrawInfo) bool {
+        _ = ctx;
+
+        return a.flags.is_text or (a.z_index < b.z_index);
+    }
+
     fn update_primitive_buffers(
         this: *const Renderer,
         render_state: *RenderState,
@@ -565,6 +572,7 @@ pub const Renderer = struct {
             c.vmaGetAllocationInfo(this.vk_allocator, render_state.textures_mem_allocation, &buffer_alloc_info);
             const data: [*]TextureDrawInfo.GpuData = @ptrCast(@alignCast(buffer_alloc_info.pMappedData.?));
 
+            std.mem.sortUnstable(TextureDrawInfo, this.render_list.textures.items, {}, sort_texture_draw_info);
             for (this.render_list.textures.items, 0..) |tex, i| {
                 const gpu_info = TextureDrawInfo.GpuData.from(tex);
                 data[i] = gpu_info;
@@ -1420,6 +1428,9 @@ pub const TextureDrawInfo = struct {
     region: Rect2,
     rotation: f32 = 0.0,
     z_index: i32 = 0,
+    flags: packed struct {
+        is_text: bool = false,
+    } = .{},
 };
 
 pub const RectDrawInfo = struct {
