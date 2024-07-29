@@ -34,11 +34,16 @@ pub const RenderTextInfo = struct {
     offset: Vec2 = Vec2.ZERO,
     scale: f32 = 1.0,
 };
-pub const Font = struct { face: ft.FT_Face, glyphs: Glyphs };
+pub const Font = struct {
+    face: ft.FT_Face,
+    glyphs: Glyphs,
+    sampler_settings: renderer.SamplerConfig = renderer.SamplerConfig.LINEAR,
+};
 pub const FontHandle = gen_arena.Index(Font);
 pub const FontDescription = struct {
     data: []const u8,
     size: u32,
+    sampler_settings: renderer.SamplerConfig = renderer.SamplerConfig.LINEAR,
 };
 
 pub const FontManager = struct {
@@ -81,6 +86,7 @@ pub const FontManager = struct {
         const font = Font{
             .face = face,
             .glyphs = Glyphs.init(this.allocator),
+            .sampler_settings = description.sampler_settings,
         };
         const index = try this.fonts.push(font);
         return index;
@@ -92,7 +98,7 @@ pub const FontManager = struct {
         for (info.text) |ch| {
             const glyph_p = try ft_font.glyphs.getOrPut(ch);
             if (!glyph_p.found_existing) {
-                glyph_p.value_ptr.* = try load_glyph(ft_font.face, ch, renderer_inst);
+                glyph_p.value_ptr.* = try load_glyph(ft_font.face, ch, renderer_inst, ft_font.sampler_settings);
             }
             const glyph = glyph_p.value_ptr.*;
             const x: f32 = offset_x + @as(f32, @floatFromInt(glyph.metrics.horiBearingX >> 6)) * info.scale;
@@ -129,7 +135,7 @@ pub const FontManager = struct {
         return this.render_text(renderer_inst, info_n);
     }
 
-    fn load_glyph(face: ft.FT_Face, char: u8, renderer_inst: *renderer.Renderer) !Glyph {
+    fn load_glyph(face: ft.FT_Face, char: u8, renderer_inst: *renderer.Renderer, sampler_settings: renderer.SamplerConfig) !Glyph {
         ft_check(ft.FT_Load_Char(face, char, ft.FT_LOAD_RENDER), "Failed to load char");
         ft_check(ft.FT_Render_Glyph(face.*.glyph, ft.FT_RENDER_MODE_NORMAL), "Failed to render char");
         var texture: ?TextureHandle = null;
@@ -143,7 +149,7 @@ pub const FontManager = struct {
                 .format = .r_8,
                 .initial_bytes = buf,
                 .flags = .{},
-                .sampler_config = renderer.SamplerConfig.NEAREST,
+                .sampler_config = sampler_settings,
             });
         }
 

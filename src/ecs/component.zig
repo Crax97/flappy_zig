@@ -13,6 +13,14 @@ const type_id = @import("../util.zig").type_id;
 pub const ErasedComponentHandle = struct {
     type_id: usize,
     index: ErasedIndex,
+    pub fn upcast(this: ErasedComponentHandle, comptime T: type, world: *World) ComponentHandle(T) {
+        std.debug.assert(type_id(T) == this.type_id);
+        const handle = ComponentHandle(T){
+            .handle = this,
+            .world = world,
+        };
+        return handle;
+    }
 };
 
 pub fn ComponentHandle(comptime T: type) type {
@@ -45,11 +53,19 @@ pub const ComponentBegin = struct {
     world: *World,
     entity: EntityID,
     handle: ErasedComponentHandle,
+
+    pub fn component_handle(this: *const ComponentBegin, comptime T: type) ComponentHandle(T) {
+        return this.handle.upcast(T, this.world);
+    }
 };
 pub const ComponentDestroyed = struct {
     world: *World,
     entity: EntityID,
     handle: ErasedComponentHandle,
+
+    fn component_handle(this: *const ComponentDestroyed, comptime T: type) ComponentHandle(T) {
+        return this.handle.upcast(T, this.world);
+    }
 };
 
 pub const ComponentUpdate = struct {
@@ -57,6 +73,10 @@ pub const ComponentUpdate = struct {
     entity: EntityID,
     handle: ErasedComponentHandle,
     delta_time: f64,
+
+    fn component_handle(this: *const ComponentUpdate, comptime T: type) ComponentHandle(T) {
+        return this.handle.upcast(T, this.world);
+    }
 };
 pub const ComponentVTable = struct {
     begin: ?*const fn (self: *anyopaque, ctx: ComponentBegin) anyerror!void,

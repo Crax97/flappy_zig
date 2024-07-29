@@ -559,7 +559,7 @@ pub const Renderer = struct {
     fn sort_texture_draw_info(ctx: void, a: TextureDrawInfo, b: TextureDrawInfo) bool {
         _ = ctx;
 
-        return a.flags.is_text or (a.z_index < b.z_index);
+        return a.z_index < b.z_index;
     }
 
     fn update_primitive_buffers(
@@ -1091,10 +1091,10 @@ pub const Renderer = struct {
                 .attachmentCount = 1,
                 .pAttachments = &[1]c.VkPipelineColorBlendAttachmentState{ .{
                     .blendEnable = c.VK_TRUE,
-                    .srcColorBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                    .srcColorBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
                     .dstColorBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                     .colorBlendOp = c.VK_BLEND_OP_ADD,
-                    .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE,
+                    .srcAlphaBlendFactor = c.VK_BLEND_FACTOR_SRC_ALPHA,
                     .dstAlphaBlendFactor = c.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                     .alphaBlendOp = c.VK_BLEND_OP_ADD,
                     .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,

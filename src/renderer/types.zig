@@ -63,6 +63,11 @@ pub const SamplerConfig = struct {
         .mag_filter = Filter.Nearest,
         .mipmap_mode = MipMode.Nearest,
     };
+    pub const LINEAR = SamplerConfig{
+        .min_filter = Filter.Linear,
+        .mag_filter = Filter.Linear,
+        .mipmap_mode = MipMode.Linear,
+    };
 };
 
 pub const Buffer = struct {

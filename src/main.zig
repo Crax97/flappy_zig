@@ -30,13 +30,16 @@ const GameState = struct {
     num_games: u32 = 0,
 };
 
-const droid_sans_mono = @embedFile("DroidSansMono.ttf");
+// from https://github.com/paulkr/Flappy-Bird/tree/master
+const font = @embedFile("flappy-font.ttf");
 
 var rand_gen: std.Random = undefined;
 
 const FlappyGame = struct {
     font: engine.FontHandle = undefined,
+    bg: TextureInfo = undefined,
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
+        engine_inst.renderer.camera.extents = vec2(288.0, 512.0);
         try engine_inst.world.add_resource(GameState{});
         var bird_entity = try engine_inst.world.new_entity();
         try bird_entity.add_component(Bird{});
@@ -45,21 +48,44 @@ const FlappyGame = struct {
         try pipe_manager.add_component(PipeManager.new(bird_entity.id()));
 
         self.font = try engine_inst.font_manager.load(engine.FontDescription{
-            .size = 24,
-            .data = droid_sans_mono,
+            .size = 36,
+            .data = font,
+            .sampler_settings = engine.renderer.SamplerConfig.NEAREST,
         });
+
+        self.bg = try load_texture_from_file(engine_inst, "./assets/sprites/background-day.png");
+
+        try engine_inst.world.add_generic_dispatcher(self, handle_restart_event);
     }
+
+    pub fn handle_restart_event(this: *FlappyGame, event: RestartEvent) anyerror!void {
+        _ = this;
+        std.debug.print("The player has done {d} games\n", .{event.games});
+    }
+
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine, delta_seconds: f64) anyerror!void {
         _ = delta_seconds;
         const state = engine_inst.world.get_resource_checked(GameState);
 
+        try engine_inst.renderer.draw_texture(engine.renderer.TextureDrawInfo{
+            .texture = self.bg.handle,
+            .position = Vec2.ZERO,
+            .rotation = 0.0,
+            .scale = Vec2.ONE,
+            .region = Rect2{
+                .offset = Vec2.ZERO,
+                .extent = self.bg.extents,
+            },
+            .z_index = -50,
+        });
+
         try engine_inst.font_manager.render_text_formatted(
             &engine_inst.renderer,
-            "Points {d}",
+            "{d}",
             .{state.points},
             .{
                 .font = self.font,
-                .offset = vec2(-200.0, -300.0),
+                .offset = vec2(0.0, -230.0),
             },
         );
     }
@@ -73,19 +99,19 @@ const RestartEvent = struct { games: u32 };
 
 const Bird = struct {
     const SPEED: f32 = 100.0;
-    bird_texture: TextureInfo = undefined,
+    const GRAVITY: f32 = 20.0;
+    const JUMP: f32 = -5.0;
+    bird_texture_down: TextureInfo = undefined,
+    bird_texture_mid: TextureInfo = undefined,
+    bird_texture_up: TextureInfo = undefined,
     velocity: Vec2 = Vec2.ZERO,
     pos: Vec2 = Vec2.ZERO,
     rot: f32 = 0.0,
 
     pub fn begin(this: *Bird, ctx: ComponentBegin) anyerror!void {
-        this.bird_texture = try load_texture_from_file(ctx.world.engine(), "./assets/apple.png");
-        try ctx.world.add_event_dispatcher(ctx.handle, handle_restart_event);
-    }
-
-    pub fn handle_restart_event(this: *Bird, event: RestartEvent) anyerror!void {
-        _ = this;
-        std.debug.print("The player has done {d} games\n", .{event.games});
+        this.bird_texture_down = try load_texture_from_file(ctx.world.engine(), "./assets/sprites/bluebird-downflap.png");
+        this.bird_texture_mid = try load_texture_from_file(ctx.world.engine(), "./assets/sprites/bluebird-midflap.png");
+        this.bird_texture_up = try load_texture_from_file(ctx.world.engine(), "./assets/sprites/bluebird-upflap.png");
     }
 
     pub fn update(this: *Bird, ctx: ComponentUpdate) anyerror!void {
@@ -104,28 +130,55 @@ const Bird = struct {
             this.velocity.set_y(-5.0);
         }
 
-        this.velocity.set_y(this.velocity.y() + @as(f32, @floatCast(ctx.delta_time)) * 10.0);
+        this.velocity.set_y(this.velocity.y() + @as(f32, @floatCast(ctx.delta_time)) * GRAVITY);
         this.pos = this.pos.add(this.velocity);
 
-        if (this.pos.y() < -400.0 or this.pos.y() > 400.0) {
-            this.pos.set_y(std.math.clamp(this.pos.y(), -400.0, 400.0));
+        if (this.pos.y() < -256.0 or this.pos.y() > 256.0) {
+            this.pos.set_y(std.math.clamp(this.pos.y(), -256.0, 256.0));
             state.bird_alive = false;
         }
 
+        const texture = this.select_texture();
+        this.update_rot(ctx.delta_time);
+
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
-            .texture = this.bird_texture.handle,
+            .texture = texture.handle,
             .position = this.pos,
             .rotation = this.rot,
             .scale = Vec2.ONE,
             .region = Rect2{
                 .offset = Vec2.ZERO,
-                .extent = this.bird_texture.extents,
+                .extent = texture.extents,
             },
-            .z_index = -10,
+            .z_index = -5,
         });
     }
+
+    fn select_texture(this: *const Bird) TextureInfo {
+        if (this.velocity.y() > 0.5) {
+            return this.bird_texture_down;
+        }
+        if (this.velocity.y() < 0.0) {
+            return this.bird_texture_up;
+        }
+        return this.bird_texture_mid;
+    }
+
+    fn update_rot(this: *Bird, dt: f64) void {
+        var target_rot: f32 = std.math.pi / 6.0;
+        var lerp_speed: f32 = 5.0;
+        if (this.velocity.y() < 0.0) {
+            target_rot = -target_rot;
+            lerp_speed = 30.0;
+        }
+
+        this.rot = std.math.lerp(this.rot, target_rot, lerp_speed * @as(f32, @floatCast(dt)));
+    }
+
     pub fn destroyed(self: *Bird, ctx: ComponentDestroyed) anyerror!void {
-        ctx.world.engine().renderer.free_texture(self.bird_texture.handle);
+        ctx.world.engine().renderer.free_texture(self.bird_texture_down.handle);
+        ctx.world.engine().renderer.free_texture(self.bird_texture_up.handle);
+        ctx.world.engine().renderer.free_texture(self.bird_texture_mid.handle);
     }
 };
 
@@ -134,11 +187,10 @@ const Pipe = struct {
     hit: bool = false,
 };
 const PipeManager = struct {
-    const PIPE_HEIGHT: f32 = 600.0;
-    const PIPE_WIDTH: f32 = 30.0;
-    const PIPE_GAP: f32 = 200.0;
-    const PIPE_SPEED: f32 = 300.0;
+    const PIPE_GAP: f32 = 150.0;
+    const PIPE_SPEED: f32 = 200.0;
     const PIPE_DIST: f32 = 300.0;
+    const PIPE_MAX_HEIGHT: f32 = 120.0;
     pipes: [5]Pipe = .{
         .{},
         .{},
@@ -148,6 +200,7 @@ const PipeManager = struct {
     },
     player: EntityID,
     bird: ComponentHandle(Bird) = undefined,
+    pipe_texture: TextureInfo = undefined,
 
     fn new(player: EntityID) PipeManager {
         return .{
@@ -158,8 +211,8 @@ const PipeManager = struct {
     pub fn begin(this: *PipeManager, ctx: ComponentBegin) anyerror!void {
         try this.init();
         this.bird = ctx.world.get_component(Bird, this.player).?;
-
-        try ctx.world.add_event_dispatcher(ctx.handle, on_restart_event);
+        this.pipe_texture = try load_texture_from_file(ctx.world.engine(), "assets/sprites/pipe-green.png");
+        try ctx.world.add_event_dispatcher(PipeManager, ctx.component_handle(PipeManager), on_restart_event);
     }
 
     pub fn on_restart_event(this: *PipeManager, event: RestartEvent) anyerror!void {
@@ -175,7 +228,7 @@ const PipeManager = struct {
 
     fn reset_pipe(pipe: *Pipe, index_mult: u32) !void {
         pipe.pos.set_x(700.0 + @as(f32, @floatFromInt(index_mult)) * PIPE_DIST);
-        const y = 160.0 * rand_gen.float(f32);
+        const y = PIPE_MAX_HEIGHT * rand_gen.float(f32);
         pipe.pos.set_y(y);
         pipe.hit = false;
     }
@@ -190,24 +243,24 @@ const PipeManager = struct {
         for (&this.pipes) |*pipe| {
             if (state.bird_alive) {
                 pipe.pos.set_x(pipe.pos.x() - PIPE_SPEED * @as(f32, @floatCast(delta_secs)));
-                if (pipe.pos.x() <= -(600.0 + 2.0 * PIPE_WIDTH)) {
+                if (pipe.pos.x() <= -(288.0 + 2.0 * this.pipe_texture.extents.x())) {
                     try reset_pipe(pipe, 0);
                 }
             }
 
             const rect_1 = Rect2{
-                .offset = vec2(pipe.pos.x(), pipe.pos.y() + (PIPE_HEIGHT + PIPE_GAP) * 0.5),
-                .extent = vec2(PIPE_WIDTH, PIPE_HEIGHT),
+                .offset = vec2(pipe.pos.x(), pipe.pos.y() + (this.pipe_texture.extents.y() + PIPE_GAP) * 0.5),
+                .extent = vec2(this.pipe_texture.extents.x(), this.pipe_texture.extents.y()),
             };
 
             const rect_2 = Rect2{
-                .offset = vec2(pipe.pos.x(), pipe.pos.y() - (PIPE_HEIGHT + PIPE_GAP) * 0.5),
-                .extent = vec2(PIPE_WIDTH, PIPE_HEIGHT),
+                .offset = vec2(pipe.pos.x(), pipe.pos.y() - (this.pipe_texture.extents.y() + PIPE_GAP) * 0.5),
+                .extent = vec2(this.pipe_texture.extents.x(), this.pipe_texture.extents.y()),
             };
 
             const gap_rect = Rect2{
                 .offset = vec2(pipe.pos.x(), pipe.pos.y() - PIPE_GAP * 0.5),
-                .extent = vec2(PIPE_WIDTH, PIPE_HEIGHT),
+                .extent = vec2(this.pipe_texture.extents.x(), this.pipe_texture.extents.y()),
             };
 
             var color_1 = math.vec4(0.0, 1.0, 0.0, 1.0);
@@ -237,18 +290,35 @@ const PipeManager = struct {
             }
 
             var renderer = &engine_inst.renderer;
-            try renderer.draw_rect(engine.renderer.RectDrawInfo{
-                .color = color_1,
-                .rect = rect_1,
-                .z_index = -15,
+
+            try renderer.draw_texture(engine.renderer.TextureDrawInfo{
+                .texture = this.pipe_texture.handle,
+                .position = rect_1.offset,
+                .rotation = 0.0,
+                .scale = Vec2.ONE,
+                .region = Rect2{
+                    .offset = Vec2.ZERO,
+                    .extent = this.pipe_texture.extents,
+                },
+                .z_index = -10,
             });
 
-            try renderer.draw_rect(engine.renderer.RectDrawInfo{
-                .color = color_2,
-                .rect = rect_2,
-                .z_index = -15,
+            try renderer.draw_texture(engine.renderer.TextureDrawInfo{
+                .texture = this.pipe_texture.handle,
+                .position = rect_2.offset,
+                .rotation = 0.0,
+                .scale = vec2(1.0, -1.0),
+                .region = Rect2{
+                    .offset = Vec2.ZERO,
+                    .extent = this.pipe_texture.extents,
+                },
+                .z_index = -10,
             });
         }
+    }
+
+    pub fn destroyed(this: *PipeManager, ctx: ComponentDestroyed) anyerror!void {
+        ctx.world.engine().renderer.free_texture(this.pipe_texture.handle);
     }
 };
 
@@ -304,8 +374,8 @@ pub fn main() !void {
     rand_gen = rand.random();
 
     var engine_instance = try engine.Engine.init(.{
-        .width = 800,
-        .height = 1200,
+        .width = 288 * 2,
+        .height = 512 * 2,
         .name = "Flappy Game",
     }, allocator);
     defer engine_instance.deinit();

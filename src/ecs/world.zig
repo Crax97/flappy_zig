@@ -208,12 +208,23 @@ pub const World = struct {
         return this.resources.get_checked(T);
     }
 
-    pub fn add_event_dispatcher(this: *World, handle: ErasedComponentHandle, func: anytype) !void {
-        return try this.event_queue.register_dispatcher(handle, func);
+    /// Adds an event dispatcher tied to a component.
+    /// Prefer this to `add_generic_dispatcher` when you know that the target is a component.
+    /// The reason is that a component's address isn't pinned in memory:
+    /// their backing storage may be moved around during the lifetime of the application.
+    pub fn add_event_dispatcher(this: *World, comptime T: type, handle: ComponentHandle(T), func: anytype) !void {
+        return try this.event_queue.register_component_dispatcher(T, handle, func);
     }
 
+    /// Adds a generic event dispatcher to the global event list.
+    /// NOTE: The `this` pointer MUST not move in memory after the event dispatcher has been registered!
+    /// Violating this invariant will result in undefined behavior! If you can, prefer using the safer
+    /// `add_event_dispatcher`
+    pub fn add_generic_dispatcher(this: *World, target: anytype, func: anytype) !void {
+        return try this.event_queue.register_any_dispatcher(target, func);
+    }
     pub fn push_event(this: *World, event: anytype) !void {
-        return try this.event_queue.push_event(event, &this.storage);
+        return try this.event_queue.push_event(event, this);
     }
 
     pub fn get_storage(this: *World, comptime T: type) *ComponentStorage {
