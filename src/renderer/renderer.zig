@@ -90,7 +90,7 @@ pub const Renderer = struct {
         errdefer c.vkDestroyDevice(device.handle, null);
 
         var swapchain = Swapchain{};
-        try swapchain.init(instance, physical_device.device, device.handle, surface, device.queue.handle, device.queue.qfi, allocator);
+        try swapchain.init(window, instance, physical_device.device, device.handle, surface, device.queue.handle, device.queue.qfi, allocator);
 
         std.log.info("Picked device {s}\n", .{physical_device.properties.deviceName});
 
@@ -1225,8 +1225,9 @@ const Swapchain = struct {
     current_image: u32 = undefined,
 
     acquire_fence: c.VkFence = null,
+    image_count: u32 = 0,
 
-    fn init(this: *Swapchain, instance: c.VkInstance, physical_device: c.VkPhysicalDevice, device: c.VkDevice, surface: c.VkSurfaceKHR, queue: c.VkQueue, qfi: u32, allocator: Allocator) !void {
+    fn init(this: *Swapchain, window: *Window, instance: c.VkInstance, physical_device: c.VkPhysicalDevice, device: c.VkDevice, surface: c.VkSurfaceKHR, queue: c.VkQueue, qfi: u32, allocator: Allocator) !void {
         _ = instance;
         this.deinit(device, allocator);
         if (this.images.len > 0) {
@@ -1248,10 +1249,27 @@ const Swapchain = struct {
         const present_mode = c.VK_PRESENT_MODE_FIFO_KHR;
         const flags = c.VK_IMAGE_USAGE_SAMPLED_BIT | c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT | c.VK_IMAGE_USAGE_TRANSFER_DST_BIT | c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
+        var width_c: c_int = 0;
+        var height_c: c_int = 0;
+        c.SDL_GetWindowSize(window.window, &width_c, &height_c);
+
+        var width: u32 = @intCast(width_c);
+        var height: u32 = @intCast(height_c);
+
+        width = std.math.clamp(width, surface_info.minImageExtent.width, surface_info.maxImageExtent.width);
+        height = std.math.clamp(height, surface_info.minImageExtent.height, surface_info.maxImageExtent.height);
+
+        const extent = c.VkExtent2D{ .width = width, .height = height };
+
+        this.image_count = @intCast(Renderer.FRAMES_IN_FLIGHT);
+        if (this.image_count < surface_info.minImageCount) {
+            this.image_count = surface_info.minImageCount;
+        }
+
         const swapchain_create_info = c.VkSwapchainCreateInfoKHR{
             .sType = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
             .surface = surface,
-            .minImageCount = Renderer.FRAMES_IN_FLIGHT,
+            .minImageCount = this.image_count,
             .imageFormat = img_format.format,
             .imageColorSpace = img_format.colorSpace,
             .imageSharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
@@ -1260,7 +1278,7 @@ const Swapchain = struct {
             .imageUsage = flags,
             .clipped = c.VK_TRUE,
             .preTransform = surface_info.currentTransform,
-            .imageExtent = surface_info.currentExtent,
+            .imageExtent = extent,
             .imageArrayLayers = 1,
             .compositeAlpha = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
             .presentMode = present_mode,
@@ -1269,13 +1287,13 @@ const Swapchain = struct {
         var swapchain_instance: c.VkSwapchainKHR = undefined;
         vk_check(c.vkCreateSwapchainKHR(device, &swapchain_create_info, null, &swapchain_instance), "Failed to create swapchain");
         errdefer c.vkDestroySwapchainKHR(device, swapchain_instance, null);
-        this.* = Swapchain{ .handle = swapchain_instance, .current_image = 0, .extents = swapchain_create_info.imageExtent, .format = img_format, .images = try allocator.alloc(SwapchainImage, 3), .present_mode = present_mode, .acquire_fence = acquire_fence };
+        this.* = Swapchain{ .handle = swapchain_instance, .current_image = 0, .extents = swapchain_create_info.imageExtent, .format = img_format, .images = try allocator.alloc(SwapchainImage, @intCast(this.image_count)), .present_mode = present_mode, .acquire_fence = acquire_fence, .image_count = this.image_count };
 
         var presentable_images: u32 = undefined;
         vk_check(c.vkGetSwapchainImagesKHR(device, swapchain_instance, &presentable_images, null), "Failed to get the number of presentable images");
 
-        const images = try allocator.alloc(c.VkImage, Renderer.FRAMES_IN_FLIGHT);
-        const views = try allocator.alloc(c.VkImageView, Renderer.FRAMES_IN_FLIGHT);
+        const images = try allocator.alloc(c.VkImage, @intCast(this.image_count));
+        const views = try allocator.alloc(c.VkImageView, @intCast(this.image_count));
         defer allocator.free(images);
         defer allocator.free(views);
 
