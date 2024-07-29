@@ -28,6 +28,35 @@ fn ArenaIterator(comptime T: type) type {
     };
 }
 
+fn ArenaIteratorWithIndex(comptime T: type) type {
+    return struct {
+        pub const El = struct {
+            ptr: *T,
+            index: ErasedIndex,
+        };
+        arena: *const ErasedArena,
+        current: usize,
+
+        pub fn next(this: *@This()) ?El {
+            while (this.current < this.arena.capacity) {
+                const entry = this.arena.entry_ptr(T, this.current);
+                this.current += 1;
+
+                if (entry.value) |*value| {
+                    return .{
+                        .ptr = value,
+                        .index = ErasedIndex{
+                            .index = this.current - 1,
+                            .generation = entry.generation,
+                        },
+                    };
+                }
+            }
+            return null;
+        }
+    };
+}
+
 pub const ErasedArena = struct {
     data: ErasedArenaMemory,
     type_info: TypeInfo,
@@ -125,6 +154,11 @@ pub const ErasedArena = struct {
     pub fn iterator(self: *This, comptime T: type) ArenaIterator(T) {
         std.debug.assert(type_id(T) == self.type_info.type_id);
         return ArenaIterator(T){ .arena = self, .current = 0 };
+    }
+
+    pub fn iterator_with_index(self: *This, comptime T: type) ArenaIteratorWithIndex(T) {
+        std.debug.assert(type_id(T) == self.type_info.type_id);
+        return ArenaIteratorWithIndex(T){ .arena = self, .current = 0 };
     }
 
     pub fn clear(self: *This) Allocator.Error!void {

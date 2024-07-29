@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const component = @import("component.zig");
 pub const world = @import("world.zig");
+pub const events = @import("events.zig");
 
 pub const World = world.World;
 pub const EntityID = world.EntityID;

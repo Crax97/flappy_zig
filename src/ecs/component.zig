@@ -44,15 +44,18 @@ pub fn ComponentHandle(comptime T: type) type {
 pub const ComponentBegin = struct {
     world: *World,
     entity: EntityID,
+    handle: ErasedComponentHandle,
 };
 pub const ComponentDestroyed = struct {
     world: *World,
     entity: EntityID,
+    handle: ErasedComponentHandle,
 };
 
 pub const ComponentUpdate = struct {
     world: *World,
     entity: EntityID,
+    handle: ErasedComponentHandle,
     delta_time: f64,
 };
 pub const ComponentVTable = struct {
@@ -117,18 +120,9 @@ pub const ComponentStorage = struct {
         return ErasedComponentHandle{ .type_id = type_id(T), .index = index };
     }
 
-    // fn get_component(this: *World, allocator: Allocator, index: ErasedComponentHandle) Allocator.Error!?*anyopaque {
-    //     const id = index.type_id;
-    //     var map = try this.storage.getOrPut(id);
-    //     if (!map.found_existing) {
-    //         map.value_ptr.* = ComponentStorage{
-    //             .arena = try ErasedArena.init(T, allocator),
-    //             .vtable = ComponentVTable.of(T),
-    //         };
-    //     }
-
-    //     return try map.value_ptr.arena.get_ptr(T, index.index);
-    // }
+    pub fn get_component(this: *ComponentStorage, comptime T: type, index: ErasedComponentHandle) ?*T {
+        return this.arena.get_ptr(T, index.index);
+    }
 };
 
 pub const ComponentArenaVTable = struct {
@@ -148,11 +142,15 @@ pub const ComponentArenaVTable = struct {
         const gen = struct {
             fn begin_all(arena: *ErasedArena, world: *World) anyerror!void {
                 if (@hasDecl(T, "begin")) {
-                    var arena_interator = arena.iterator(T);
+                    var arena_interator = arena.iterator_with_index(T);
                     while (arena_interator.next()) |value| {
-                        try value.begin(ComponentBegin{
+                        try value.ptr.begin(ComponentBegin{
                             .world = world,
                             .entity = undefined,
+                            .handle = ErasedComponentHandle{
+                                .index = value.index,
+                                .type_id = type_id(T),
+                            },
                         });
                     }
                 }
@@ -163,24 +161,39 @@ pub const ComponentArenaVTable = struct {
                     return entry.*.begin(ComponentBegin{
                         .world = world,
                         .entity = id,
+                        .handle = ErasedComponentHandle{
+                            .index = index,
+                            .type_id = type_id(T),
+                        },
                     });
                 }
             }
             fn update_all(arena: *ErasedArena, world: *World, dt: f64) anyerror!void {
-                var arena_interator = arena.iterator(T);
+                var arena_interator = arena.iterator_with_index(T);
                 while (arena_interator.next()) |value| {
-                    try value.update(ComponentUpdate{
+                    try value.ptr.update(ComponentUpdate{
                         .delta_time = dt,
                         .world = world,
                         .entity = undefined,
+                        .handle = ErasedComponentHandle{
+                            .index = value.index,
+                            .type_id = type_id(T),
+                        },
                     });
                 }
             }
             fn destroy_all(arena: *ErasedArena, world: *World) anyerror!void {
                 if (@hasDecl(T, "destroyed")) {
-                    var arena_interator = arena.iterator(T);
+                    var arena_interator = arena.iterator_with_index(T);
                     while (arena_interator.next()) |value| {
-                        try value.destroyed(ComponentDestroyed{ .entity = undefined, .world = world });
+                        try value.ptr.destroyed(ComponentDestroyed{
+                            .entity = undefined,
+                            .world = world,
+                            .handle = ErasedComponentHandle{
+                                .index = value.index,
+                                .type_id = type_id(T),
+                            },
+                        });
                     }
                 }
             }

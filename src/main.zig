@@ -24,15 +24,20 @@ const SDL = @import("clibs.zig");
 
 const World = ecs.World;
 
+const GameState = struct {
+    bird_alive: bool = true,
+    points: u32 = 0,
+    num_games: u32 = 0,
+};
+
 const droid_sans_mono = @embedFile("DroidSansMono.ttf");
 
 var rand_gen: std.Random = undefined;
-var running: bool = true;
-var points: u32 = 0;
 
 const FlappyGame = struct {
     font: engine.FontHandle = undefined,
     pub fn init(self: *FlappyGame, engine_inst: *engine.Engine) anyerror!void {
+        try engine_inst.world.add_resource(GameState{});
         var bird_entity = try engine_inst.world.new_entity();
         try bird_entity.add_component(Bird{});
 
@@ -46,10 +51,12 @@ const FlappyGame = struct {
     }
     pub fn update(self: *FlappyGame, engine_inst: *engine.Engine, delta_seconds: f64) anyerror!void {
         _ = delta_seconds;
+        const state = engine_inst.world.get_resource_checked(GameState);
+
         try engine_inst.font_manager.render_text_formatted(
             &engine_inst.renderer,
             "Points {d}",
-            .{points},
+            .{state.points},
             .{
                 .font = self.font,
                 .offset = vec2(-200.0, -300.0),
@@ -62,29 +69,38 @@ const FlappyGame = struct {
     }
 };
 
+const RestartEvent = struct { games: u32 };
+
 const Bird = struct {
     const SPEED: f32 = 100.0;
     bird_texture: TextureInfo = undefined,
     velocity: Vec2 = Vec2.ZERO,
     pos: Vec2 = Vec2.ZERO,
     rot: f32 = 0.0,
-    reset: bool = true,
 
     pub fn begin(this: *Bird, ctx: ComponentBegin) anyerror!void {
         this.bird_texture = try load_texture_from_file(ctx.world.engine(), "./assets/apple.png");
+        try ctx.world.add_event_dispatcher(ctx.handle, handle_restart_event);
+    }
+
+    pub fn handle_restart_event(this: *Bird, event: RestartEvent) anyerror!void {
+        _ = this;
+        std.debug.print("The player has done {d} games\n", .{event.games});
     }
 
     pub fn update(this: *Bird, ctx: ComponentUpdate) anyerror!void {
-        this.reset = false;
         var renderer = &ctx.world.engine().renderer;
+        const state = ctx.world.get_resource_checked(GameState);
+
         if (engine.Input.is_key_just_down(SDL.SDL_SCANCODE_R)) {
             this.pos = Vec2.ZERO;
             this.velocity = Vec2.ZERO;
-            running = true;
-            points = 0;
-            this.reset = true;
+            state.bird_alive = true;
+            state.points = 0;
+            state.num_games += 1;
+            try ctx.world.push_event(RestartEvent{ .games = state.num_games });
         }
-        if (engine.Input.is_key_down(c.SDL_SCANCODE_SPACE) and running) {
+        if (engine.Input.is_key_down(c.SDL_SCANCODE_SPACE) and state.bird_alive) {
             this.velocity.set_y(-5.0);
         }
 
@@ -93,7 +109,7 @@ const Bird = struct {
 
         if (this.pos.y() < -400.0 or this.pos.y() > 400.0) {
             this.pos.set_y(std.math.clamp(this.pos.y(), -400.0, 400.0));
-            running = false;
+            state.bird_alive = false;
         }
 
         try renderer.draw_texture(engine.renderer.TextureDrawInfo{
@@ -142,6 +158,13 @@ const PipeManager = struct {
     pub fn begin(this: *PipeManager, ctx: ComponentBegin) anyerror!void {
         try this.init();
         this.bird = ctx.world.get_component(Bird, this.player).?;
+
+        try ctx.world.add_event_dispatcher(ctx.handle, on_restart_event);
+    }
+
+    pub fn on_restart_event(this: *PipeManager, event: RestartEvent) anyerror!void {
+        try this.init();
+        _ = event;
     }
 
     fn init(this: *PipeManager) !void {
@@ -162,13 +185,10 @@ const PipeManager = struct {
         const player_pos = bird.pos;
         const delta_secs = ctx.delta_time;
         var engine_inst = ctx.world.engine();
-
-        if (bird.reset) {
-            try this.init();
-        }
+        const state = ctx.world.get_resource_checked(GameState);
 
         for (&this.pipes) |*pipe| {
-            if (running) {
+            if (state.bird_alive) {
                 pipe.pos.set_x(pipe.pos.x() - PIPE_SPEED * @as(f32, @floatCast(delta_secs)));
                 if (pipe.pos.x() <= -(600.0 + 2.0 * PIPE_WIDTH)) {
                     try reset_pipe(pipe, 0);
@@ -198,21 +218,21 @@ const PipeManager = struct {
                 .extent = vec2(32.0, 32.0),
             })) {
                 color_1 = math.vec4(1.0, 0.0, 0.0, 1.0);
-                running = false;
+                state.bird_alive = false;
             }
             if (rect_2.intersects(Rect2{
                 .offset = player_pos,
                 .extent = vec2(32.0, 32.0),
             })) {
                 color_2 = math.vec4(1.0, 0.0, 0.0, 1.0);
-                running = false;
+                state.bird_alive = false;
             }
 
-            if (running and gap_rect.intersects(Rect2{
+            if (state.bird_alive and gap_rect.intersects(Rect2{
                 .offset = player_pos,
                 .extent = vec2(32.0, 32.0),
             }) and !pipe.hit) {
-                points += 1;
+                state.points += 1;
                 pipe.hit = true;
             }
 

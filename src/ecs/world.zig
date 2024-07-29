@@ -1,8 +1,10 @@
 const std = @import("std");
 const gen_arena = @import("../gen_arena.zig");
 const util = @import("../util.zig");
-
+const resources = @import("resources.zig");
+const events = @import("events.zig");
 pub const component_mod = @import("component.zig");
+
 const ComponentVTable = component_mod.ComponentVTable;
 const ComponentBegin = component_mod.ComponentBegin;
 const ComponentUpdate = component_mod.ComponentUpdate;
@@ -11,6 +13,9 @@ const ErasedComponentHandle = component_mod.ErasedComponentHandle;
 const ComponentHandle = component_mod.ComponentHandle;
 const ComponentStorage = component_mod.ComponentStorage;
 const ComponentArenaVTable = component_mod.ComponentArenaVTable;
+
+const Resources = resources.Resources;
+const EventQueue = events.EventQueue;
 
 const ErasedArena = gen_arena.ErasedArena;
 const Allocator = std.mem.Allocator;
@@ -102,6 +107,8 @@ pub const World = struct {
     allocator: Allocator,
     entities: Entities,
     new_entities: NewEntities,
+    resources: Resources,
+    event_queue: EventQueue,
     engine_inst: ?*Engine,
 
     pub fn init(allocator: Allocator) Allocator.Error!World {
@@ -111,6 +118,8 @@ pub const World = struct {
             .entities = try Entities.init(allocator),
             .new_entities = NewEntities.init(allocator),
             .engine_inst = null,
+            .resources = Resources.init(allocator),
+            .event_queue = EventQueue.init(allocator),
         };
     }
 
@@ -135,7 +144,9 @@ pub const World = struct {
 
             ent.components.deinit();
         }
+        this.resources.deinit();
         this.new_entities.deinit();
+        this.event_queue.deinit();
     }
 
     pub fn set_engine(this: *World, engine_inst: *Engine) void {
@@ -183,6 +194,26 @@ pub const World = struct {
             }
         }
         return null;
+    }
+
+    pub fn add_resource(this: *World, resource: anytype) !void {
+        try this.resources.add(resource);
+    }
+
+    pub fn get_resource(this: *World, comptime T: type) ?*T {
+        return this.resources.get(T);
+    }
+
+    pub fn get_resource_checked(this: *World, comptime T: type) *T {
+        return this.resources.get_checked(T);
+    }
+
+    pub fn add_event_dispatcher(this: *World, handle: ErasedComponentHandle, func: anytype) !void {
+        return try this.event_queue.register_dispatcher(handle, func);
+    }
+
+    pub fn push_event(this: *World, event: anytype) !void {
+        return try this.event_queue.push_event(event, &this.storage);
     }
 
     pub fn get_storage(this: *World, comptime T: type) *ComponentStorage {
