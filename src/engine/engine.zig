@@ -17,6 +17,8 @@ pub const FontHandle = fonts.FontHandle;
 pub const FontDescription = fonts.FontDescription;
 
 pub const Texture = renderer.Texture;
+pub const AudioSystem = audio_system.AudioSystem;
+pub const SoundEffectHandle = audio_system.SoundEffectHandle;
 
 pub const Game = struct {
     target: *anyopaque,
@@ -55,8 +57,10 @@ pub const Engine = struct {
     window: window.Window,
     renderer: renderer.Renderer,
     font_manager: FontManager,
+    audio_system: AudioSystem,
     running: bool = true,
     world: World,
+    allocator: std.mem.Allocator,
 
     pub fn init(window_config: window.WindowConfig, allocator: std.mem.Allocator) !Engine {
         if (c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_JOYSTICK | c.SDL_INIT_GAMECONTROLLER | c.SDL_INIT_TIMER) != 0) {
@@ -67,19 +71,21 @@ pub const Engine = struct {
         const renderer_instance = try renderer.Renderer.init(&win, allocator);
 
         try input.init(allocator);
-        audio_system.init();
+        const system = try AudioSystem.init(allocator);
 
         return .{
             .window = win,
             .renderer = renderer_instance,
             .font_manager = try FontManager.init(allocator),
+            .audio_system = system,
             .world = try World.init(allocator),
+            .allocator = allocator,
         };
     }
 
     pub fn deinit(this: *Engine) void {
         input.deinit();
-        audio_system.deinit();
+        this.audio_system.deinit();
         this.font_manager.deinit(&this.renderer);
         this.renderer.deinit();
         this.window.deinit();

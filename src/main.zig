@@ -9,6 +9,7 @@ const ComponentDestroyed = ecs.ComponentDestroyed;
 const window = @import("engine/window.zig");
 const sdl_util = @import("sdl_util.zig");
 const engine = @import("engine/engine.zig");
+const wav_lib = @import("engine/audio/wav.zig");
 
 const math = @import("math/main.zig");
 const Vec2 = math.Vec2;
@@ -16,6 +17,7 @@ const Rect2 = math.Rect2;
 const vec2 = math.vec2;
 
 const TextureHandle = engine.TextureHandle;
+const SoundEffectHandle = engine.SoundEffectHandle;
 const Engine = engine.Engine;
 const EntityID = ecs.EntityID;
 const ComponentHandle = ecs.ComponentHandle;
@@ -32,7 +34,6 @@ const GameState = struct {
 
 // from https://github.com/paulkr/Flappy-Bird/tree/master
 const font = @embedFile("flappy-font.ttf");
-
 var rand_gen: std.Random = undefined;
 
 const FlappyGame = struct {
@@ -99,11 +100,12 @@ const RestartEvent = struct { games: u32 };
 
 const Bird = struct {
     const SPEED: f32 = 100.0;
-    const GRAVITY: f32 = 20.0;
-    const JUMP: f32 = -5.0;
+    const GRAVITY: f32 = 25.0;
+    const JUMP: f32 = -8.0;
     bird_texture_down: TextureInfo = undefined,
     bird_texture_mid: TextureInfo = undefined,
     bird_texture_up: TextureInfo = undefined,
+    flap_sound: SoundEffectHandle = undefined,
     fg: TextureInfo = undefined,
     velocity: Vec2 = Vec2.ZERO,
     pos: Vec2 = Vec2.ZERO,
@@ -114,6 +116,7 @@ const Bird = struct {
         this.bird_texture_down = try load_texture_from_file(Engine.instance(), "./assets/sprites/bluebird-downflap.png");
         this.bird_texture_mid = try load_texture_from_file(Engine.instance(), "./assets/sprites/bluebird-midflap.png");
         this.bird_texture_up = try load_texture_from_file(Engine.instance(), "./assets/sprites/bluebird-upflap.png");
+        this.flap_sound = try load_sound_from_file(Engine.instance(), "./assets/audio/wing.wav");
         this.fg = try load_texture_from_file(Engine.instance(), "./assets/sprites/base.png");
     }
 
@@ -129,15 +132,16 @@ const Bird = struct {
             state.num_games += 1;
             try ctx.world.push_event(RestartEvent{ .games = state.num_games });
         }
-        if (engine.Input.is_key_down(c.SDL_SCANCODE_SPACE) and state.bird_alive) {
+        if (engine.Input.is_key_just_down(c.SDL_SCANCODE_SPACE) and state.bird_alive) {
             this.velocity.set_y(-5.0);
+            Engine.instance().audio_system.play_sound_effect(this.flap_sound);
         }
 
         this.velocity.set_y(this.velocity.y() + @as(f32, @floatCast(ctx.delta_time)) * GRAVITY);
         this.pos = this.pos.add(this.velocity);
 
-        if (this.pos.y() < -256.0 or this.pos.y() > 256.0 - this.fg.extents.y()) {
-            this.pos.set_y(std.math.clamp(this.pos.y(), -256.0, 256.0 - this.fg.extents.y()));
+        if (this.pos.y() < -256.0 or this.pos.y() > 256.0 - this.fg.extents.y() - this.bird_texture_mid.extents.y() * 0.5) {
+            this.pos.set_y(std.math.clamp(this.pos.y(), -256.0, 256.0 - this.fg.extents.y() - this.bird_texture_mid.extents.y() * 0.5));
             state.bird_alive = false;
         }
 
@@ -192,6 +196,7 @@ const Bird = struct {
 
     pub fn destroyed(this: *Bird, ctx: ComponentDestroyed) anyerror!void {
         _ = ctx;
+        Engine.instance().audio_system.destroy_sound_effect(this.flap_sound);
         Engine.instance().renderer.free_texture(this.bird_texture_down.handle);
         Engine.instance().renderer.free_texture(this.bird_texture_up.handle);
         Engine.instance().renderer.free_texture(this.bird_texture_mid.handle);
@@ -205,7 +210,7 @@ const Pipe = struct {
 };
 const PipeManager = struct {
     const PIPE_GAP: f32 = 150.0;
-    const PIPE_SPEED: f32 = 200.0;
+    const PIPE_SPEED: f32 = 150.0;
     const PIPE_DIST: f32 = 300.0;
     const PIPE_MAX_HEIGHT: f32 = 20.0;
     const PIPE_MIN_HEIGHT: f32 = -150.0;
@@ -219,6 +224,8 @@ const PipeManager = struct {
     player: EntityID,
     bird: ComponentHandle(Bird) = undefined,
     pipe_texture: TextureInfo = undefined,
+    hit_sound: SoundEffectHandle = undefined,
+    point_sound: SoundEffectHandle = undefined,
     last_reset_pipe: usize = 4,
 
     fn new(player: EntityID) PipeManager {
@@ -231,6 +238,8 @@ const PipeManager = struct {
         try this.init();
         this.bird = ctx.world.get_component(Bird, this.player).?;
         this.pipe_texture = try load_texture_from_file(Engine.instance(), "assets/sprites/pipe-green.png");
+        this.hit_sound = try load_sound_from_file(Engine.instance(), "./assets/audio/hit.wav");
+        this.point_sound = try load_sound_from_file(Engine.instance(), "./assets/audio/point.wav");
 
         try ctx.world.add_event_dispatcher(PipeManager, ctx.component_handle(PipeManager), on_restart_event);
     }
@@ -288,30 +297,26 @@ const PipeManager = struct {
                 .extent = vec2(this.pipe_texture.extents.x(), this.pipe_texture.extents.y()),
             };
 
-            var color_1 = math.vec4(0.0, 1.0, 0.0, 1.0);
-            var color_2 = math.vec4(0.0, 1.0, 0.0, 1.0);
+            if (state.bird_alive) {
+                if (rect_1.intersects(Rect2{
+                    .offset = player_pos,
+                    .extent = vec2(32.0, 32.0),
+                }) or rect_2.intersects(Rect2{
+                    .offset = player_pos,
+                    .extent = vec2(32.0, 32.0),
+                })) {
+                    state.bird_alive = false;
+                    Engine.instance().audio_system.play_sound_effect(this.hit_sound);
+                }
 
-            if (rect_1.intersects(Rect2{
-                .offset = player_pos,
-                .extent = vec2(32.0, 32.0),
-            })) {
-                color_1 = math.vec4(1.0, 0.0, 0.0, 1.0);
-                state.bird_alive = false;
-            }
-            if (rect_2.intersects(Rect2{
-                .offset = player_pos,
-                .extent = vec2(32.0, 32.0),
-            })) {
-                color_2 = math.vec4(1.0, 0.0, 0.0, 1.0);
-                state.bird_alive = false;
-            }
-
-            if (state.bird_alive and gap_rect.intersects(Rect2{
-                .offset = player_pos,
-                .extent = vec2(32.0, 32.0),
-            }) and !pipe.hit) {
-                state.points += 1;
-                pipe.hit = true;
+                if (gap_rect.intersects(Rect2{
+                    .offset = player_pos,
+                    .extent = vec2(32.0, 32.0),
+                }) and !pipe.hit) {
+                    state.points += 1;
+                    pipe.hit = true;
+                    Engine.instance().audio_system.play_sound_effect(this.point_sound);
+                }
             }
 
             try renderer.draw_texture(engine.renderer.TextureDrawInfo{
@@ -340,9 +345,10 @@ const PipeManager = struct {
         }
     }
 
-    fn destroyed(this: *PipeManager, ctx: ComponentDestroyed, foo: u32) anyerror!void {
-        _ = foo;
+    pub fn destroyed(this: *PipeManager, ctx: ComponentDestroyed) anyerror!void {
         _ = ctx;
+        Engine.instance().audio_system.destroy_sound_effect(this.hit_sound);
+        Engine.instance().audio_system.destroy_sound_effect(this.point_sound);
         Engine.instance().renderer.free_texture(this.pipe_texture.handle);
     }
 };
@@ -351,6 +357,23 @@ const TextureInfo = struct {
     handle: TextureHandle,
     extents: Vec2,
 };
+
+fn load_sound_from_file(inst: *engine.Engine, path: []const u8) anyerror!SoundEffectHandle {
+    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    const bytes = try file.readToEndAlloc(inst.allocator, std.math.maxInt(usize));
+    const wav_file = try wav_lib.wav_parse_from_memory(bytes);
+
+    const sound = try inst.audio_system.create_sound_effect(.{
+        .format = switch (wav_file.channels) {
+            .Mono => .Mono,
+            .Stereo => .Stereo,
+        },
+        .byte_size = wav_file.sample_size_bits / 8,
+        .frequency = wav_file.frequency,
+        .data = wav_file.data,
+    });
+    return sound;
+}
 
 fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!TextureInfo {
     var width: c_int = undefined;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const audio_system = @import("audio_system.zig");
 
 pub const WavLoadingError = error{
     NotEnoughData,
@@ -8,8 +9,8 @@ pub const WavLoadingError = error{
 };
 
 pub const Wav = struct {
-    channels: Channels,
-    audio_format: AudioFormat,
+    channels: WavChannels,
+    audio_format: WavAudioFormat,
     frequency: u32,
     bytes_per_second: u32,
     bytes_per_block: u32,
@@ -17,12 +18,12 @@ pub const Wav = struct {
     data: []const u8,
 };
 
-const Channels = enum(u16) {
+const WavChannels = enum(u16) {
     Mono = 1,
     Stereo = 2,
 };
 
-const AudioFormat = enum(u16) {
+const WavAudioFormat = enum(u16) {
     PCM = 1,
     Float = 3, // IEEE 754
 };
@@ -40,8 +41,8 @@ const RiffHeader = extern struct {
 const FmtHeader = extern struct {
     format_block: [4]u8, // Must be 'fmt '
     block_size: u32, // Minus 8 bytes
-    audio_fmt: AudioFormat,
-    channels: Channels,
+    audio_fmt: WavAudioFormat,
+    channels: WavChannels,
     frequency: u32,
     bytes_per_sec: u32, // Frequency * #channels * bits_per_sample/8
     bytes_per_block: u16, // #channels * bits_per_sample / 8
@@ -100,7 +101,7 @@ pub fn wav_parse_from_memory(data: []const u8) WavLoadingError!Wav {
         .channels = fmt_header.channels,
         .frequency = fmt_header.frequency,
         .sample_size_bits = @intCast(fmt_header.sample_size_bits),
-        .data = data[it..data_header.data_size],
+        .data = data[it .. it + data_header.data_size],
     };
 }
 
@@ -117,5 +118,5 @@ test "load simple" {
     const wav = try wav_parse_from_memory(source);
     try std.testing.expectEqual(176400, wav.bytes_per_second);
     try std.testing.expectEqual(44100, wav.frequency);
-    try std.testing.expectEqual(Channels.Stereo, wav.channels);
+    try std.testing.expectEqual(WavChannels.Stereo, wav.channels);
 }
