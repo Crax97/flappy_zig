@@ -1,6 +1,5 @@
 const std = @import("std");
-const gen_arena = @import("../gen_arena.zig");
-const util = @import("../util.zig");
+const core = @import("core");
 const resources = @import("resources.zig");
 const events = @import("events.zig");
 pub const component_mod = @import("component.zig");
@@ -17,22 +16,23 @@ const ComponentArenaVTable = component_mod.ComponentArenaVTable;
 const Resources = resources.Resources;
 const EventQueue = events.EventQueue;
 
-const ErasedArena = gen_arena.ErasedArena;
+const ErasedArena = core.ErasedArena;
 const Allocator = std.mem.Allocator;
 
-const type_id = util.type_id;
+const type_id = core.type_id;
 
+const EntityInfoIndex = core.Index(EntityInfo);
 pub const EntityID = struct {
-    id: gen_arena.Index(EntityInfo),
+    id: EntityInfoIndex,
 };
 
 pub const EntityInfo = struct {
     components: std.ArrayList(ErasedComponentHandle),
 };
-pub const EntityIndex = gen_arena.Index(EntityInfo);
+pub const EntityIndex = EntityInfoIndex;
 
 const ComponentMap = std.AutoArrayHashMap(usize, ComponentStorage);
-const Entities = gen_arena.GenArena(EntityInfo);
+const Entities = core.GenArena(EntityInfo);
 const NewComponent = struct {
     data: *anyopaque,
     component_type_id: usize,

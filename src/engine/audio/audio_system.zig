@@ -1,11 +1,11 @@
 const std = @import("std");
 const al = @import("clibs.zig");
-const gen_arena = @import("../../gen_arena.zig");
+const core = @import("core");
 const wav = @import("wav.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub const SoundEffectHandle = gen_arena.Index(SoundEffect);
+pub const SoundEffectHandle = core.Index(SoundEffect);
 pub const AudioFormat = enum { Mono, Stereo };
 
 pub const SoundEffectInfo = struct {
@@ -19,7 +19,7 @@ const SoundEffect = struct {
     buffer: al.ALuint,
     source: al.ALuint,
 };
-const SoundEffectList = gen_arena.GenArena(SoundEffect);
+const SoundEffectList = core.GenArena(SoundEffect);
 pub const AudioSystem = struct {
     device: ?*al.ALCdevice = null,
     context: ?*al.ALCcontext = null,

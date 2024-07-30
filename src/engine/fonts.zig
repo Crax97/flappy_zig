@@ -1,11 +1,11 @@
 const std = @import("std");
 const sdl_util = @import("../sdl_util.zig");
-const gen_arena = @import("../gen_arena.zig");
+const core = @import("core");
 const renderer = @import("../renderer/main.zig");
 
 const math = @import("math");
 
-const GenArena = gen_arena.GenArena;
+const GenArena = core.GenArena;
 const TextureHandle = renderer.TextureHandle;
 
 const Allocator = std.mem.Allocator;
@@ -39,7 +39,7 @@ pub const Font = struct {
     glyphs: Glyphs,
     sampler_settings: renderer.SamplerConfig = renderer.SamplerConfig.LINEAR,
 };
-pub const FontHandle = gen_arena.Index(Font);
+pub const FontHandle = core.Index(Font);
 pub const FontDescription = struct {
     data: []const u8,
     size: u32,

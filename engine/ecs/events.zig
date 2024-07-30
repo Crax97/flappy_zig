@@ -7,7 +7,7 @@ pub const ComponentHandle = component.ComponentHandle;
 pub const ErasedComponentHandle = component.ErasedComponentHandle;
 const World = world.World;
 
-const type_id = @import("../util.zig").type_id;
+const type_id = @import("core").type_id;
 
 const Allocator = std.mem.Allocator;
 

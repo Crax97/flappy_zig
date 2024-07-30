@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const type_id = @import("../util.zig").type_id;
+const type_id = @import("core").type_id;
 
 const ErasedResource = struct {
     type_id: usize,

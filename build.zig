@@ -25,7 +25,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
-    exe.root_module.addImport("math", sdk.math_module);
     const check = b.addExecutable(.{
         .name = "gamefun",
         .root_source_file = b.path("src/main.zig"),
@@ -33,6 +32,8 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
+    sdk.add_to_target(exe);
+    sdk.add_to_target(check);
     try setup_compile(exe, b, target);
     try setup_compile(check, b, target);
 

@@ -1,14 +1,15 @@
 const std = @import("std");
 const world_mod = @import("world.zig");
+const core = @import("core");
 const World = world_mod.World;
 const EntityID = world_mod.EntityID;
 
-const ErasedArena = @import("../gen_arena.zig").ErasedArena;
-const ErasedIndex = @import("../gen_arena.zig").ErasedIndex;
+const ErasedArena = core.ErasedArena;
+const ErasedIndex = core.ErasedIndex;
 
 const Allocator = std.mem.Allocator;
 
-const type_id = @import("../util.zig").type_id;
+const type_id = core.type_id;
 
 pub const ErasedComponentHandle = struct {
     type_id: usize,
