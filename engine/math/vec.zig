@@ -28,17 +28,17 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         }
 
         pub fn y(this: *const This) T {
-            if (N < 2) @compileError("Not enough elements!" ++ N);
+            if (N < 2) @compileError("Not enough elements! ");
             return this.data[1];
         }
 
         pub fn z(this: *const This) T {
-            if (N < 3) @compileError("Not enough elements!" ++ N);
+            if (N < 3) @compileError("Not enough elements! ");
             return this.data[2];
         }
 
         pub fn w(this: *const This) T {
-            if (N < 4) @compileError("Not enough elements!" ++ N);
+            if (N < 4) @compileError("Not enough elements! ");
             return this.data[3];
         }
 
@@ -47,17 +47,17 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         }
 
         pub fn set_y(this: *This, value: T) void {
-            if (N < 2) @compileError("Not enough elements!" ++ N);
+            if (N < 2) @compileError("Not enough elements! ");
             this.data[1] = value;
         }
 
         pub fn set_z(this: *This, value: T) void {
-            if (N < 3) @compileError("Not enough elements!" ++ N);
+            if (N < 3) @compileError("Not enough elements! ");
             this.data[2] = value;
         }
 
         pub fn set_w(this: *This, value: T) void {
-            if (N < 4) @compileError("Not enough elements!" ++ N);
+            if (N < 4) @compileError("Not enough elements! ");
             this.data[3] = value;
         }
 
@@ -103,7 +103,7 @@ pub fn vec_t(comptime T: type, comptime N: comptime_int) type {
         }
 
         pub fn magnitude_squared(this: *const This) F {
-            return this.dot(this);
+            return this.dot(this.*);
         }
 
         pub fn magnitude(this: *const This) F {

@@ -11,7 +11,7 @@ const sdl_util = @import("sdl_util.zig");
 const engine = @import("engine/engine.zig");
 const wav_lib = @import("engine/audio/wav.zig");
 
-const math = @import("math/main.zig");
+const math = @import("math");
 const Vec2 = math.Vec2;
 const Rect2 = math.Rect2;
 const vec2 = math.vec2;

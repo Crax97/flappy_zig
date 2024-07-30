@@ -1,7 +1,7 @@
 const std = @import("std");
 const SDL = @import("../clibs.zig");
 
-const math = @import("../math/main.zig");
+const math = @import("math");
 
 const sdl_panic = @import("../sdl_util.zig").sdl_panic;
 

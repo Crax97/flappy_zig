@@ -1,5 +1,5 @@
 const std = @import("std");
-const math = @import("../math/main.zig");
+const math = @import("math");
 const sdl_util = @import("../sdl_util.zig");
 const sampler_allocator = @import("allocators/sampler_allocator.zig");
 const rta = @import("allocators/render_target_allocator.zig");

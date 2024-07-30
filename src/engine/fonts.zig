@@ -3,7 +3,7 @@ const sdl_util = @import("../sdl_util.zig");
 const gen_arena = @import("../gen_arena.zig");
 const renderer = @import("../renderer/main.zig");
 
-const math = @import("../math/main.zig");
+const math = @import("math");
 
 const GenArena = gen_arena.GenArena;
 const TextureHandle = renderer.TextureHandle;
