@@ -2,6 +2,8 @@ const renderer = @import("renderer.zig");
 const types = @import("types.zig");
 
 pub const Renderer = renderer.Renderer;
+pub const sdl_util = @import("sdl_util.zig");
+pub const c = @import("clibs.zig");
 
 pub const TextureDrawInfo = renderer.TextureDrawInfo;
 pub const RectDrawInfo = renderer.RectDrawInfo;

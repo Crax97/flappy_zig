@@ -90,59 +90,17 @@ pub fn build(b: *std.Build) !void {
 
 fn setup_compile(exe: *std.Build.Step.Compile, b: *std.Build, target: std.Build.ResolvedTarget) !void {
 
-    // Some libs are c++ libs
-    exe.linkLibCpp();
-
-    const env_map = try std.process.getEnvMap(b.allocator);
-
-    // STB
-    exe.addIncludePath(.{ .cwd_relative = "thirdparty/stb" });
-    exe.addCSourceFile(.{ .file = b.path("src/stb_image.cpp") });
-
-    // SDL
-    exe.addIncludePath(.{ .cwd_relative = "thirdparty/sdl/include" });
-    exe.linkSystemLibrary("SDL2");
-
-    if (target.result.os.tag == .windows) {
-        exe.addLibraryPath(b.path("thirdparty/sdl/x86_64-w64/bin/"));
-        exe.addLibraryPath(b.path("thirdparty/sdl/x86_64-w64/lib/"));
-        b.installBinFile("thirdparty/sdl/x86_64-w64/bin/SDL2.dll", "SDL2.dll");
-    }
-
-    // Vulkan
-    const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
-    exe.linkSystemLibrary(
-        vk_lib_name,
-    );
-    if (env_map.get("VULKAN_SDK")) |path| {
-        exe.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{path}) catch @panic("OOM") });
-        exe.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{path}) catch @panic("OOM") });
-    }
-
-    // VMA
-    exe.addIncludePath(b.path("thirdparty/vma/include"));
-    exe.addCSourceFile(.{ .file = b.path("src/vma.cpp") });
-
     // Freetype
     const b_freetype = b.dependency("freetype", .{});
     exe.linkLibrary(b_freetype.artifact("freetype"));
+    exe.addIncludePath(.{ .cwd_relative = "thirdparty/zig-freetype/include" });
 
-    // OpenAL
-    exe.addIncludePath(b.path("thirdparty/openal/include/"));
-    if (target.result.os.tag == .windows) {
-        // For now only x64 is supported
-        exe.addLibraryPath(b.path("thirdparty/openal/libs/Win64/"));
-        b.installBinFile("thirdparty/openal/bin/Win64/soft_oal.dll", "OpenAL32.dll");
-
-        exe.linkSystemLibrary("openal32");
-    } else if (target.result.os.tag == .linux) {
-        exe.linkSystemLibrary("openal");
-    }
+    _ = target;
 }
 
 fn build_shaders(b: *std.Build, exe: *std.Build.Step.Compile) !void {
-    const base_rel_path = "src/renderer/shaders";
-    const out_dir = "src/spirv";
+    const base_rel_path = "engine/renderer/shaders";
+    const out_dir = "engine/renderer/spirv";
     const iterator = try b.build_root.handle.openDir(base_rel_path, .{ .iterate = true });
     var it = iterator.iterate();
 

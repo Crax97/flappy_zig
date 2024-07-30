@@ -1,6 +1,6 @@
 const std = @import("std");
 const types = @import("../types.zig");
-const c = @import("../../clibs.zig");
+const c = @import("../clibs.zig");
 const sampler_allocator = @import("./sampler_allocator.zig");
 const renderer = @import("../renderer.zig");
 

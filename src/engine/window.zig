@@ -1,9 +1,9 @@
 const std = @import("std");
-const SDL = @import("../clibs.zig");
+const SDL = @import("renderer").c;
 
 const math = @import("math");
 
-const sdl_panic = @import("../sdl_util.zig").sdl_panic;
+const sdl_panic = @import("renderer").sdl_util.sdl_panic;
 
 pub const WindowConfig = struct {
     name: []const u8 = "Game",

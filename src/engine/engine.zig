@@ -1,13 +1,13 @@
 const std = @import("std");
-const c = @import("../clibs.zig");
-const sdl_util = @import("../sdl_util.zig");
 const input = @import("input.zig");
 const window = @import("window.zig");
 const time = @import("time.zig");
 const ecs = @import("ecs");
 const fonts = @import("fonts.zig");
 const audio_system = @import("audio/audio_system.zig");
-pub const renderer = @import("../renderer/main.zig");
+pub const renderer = @import("renderer");
+const sdl_util = renderer.sdl_util;
+const c = renderer.c;
 
 pub const World = ecs.World;
 pub const TextureHandle = renderer.TextureHandle;
@@ -66,9 +66,9 @@ pub const Engine = struct {
         if (c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_JOYSTICK | c.SDL_INIT_GAMECONTROLLER | c.SDL_INIT_TIMER) != 0) {
             sdl_util.sdl_panic();
         }
-        var win = window.Window.init(window_config);
+        const win = window.Window.init(window_config);
 
-        const renderer_instance = try renderer.Renderer.init(&win, allocator);
+        const renderer_instance = try renderer.Renderer.init(win.window, allocator);
 
         try input.init(allocator);
         const system = try AudioSystem.init(allocator);

@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("../clibs.zig");
+const c = @import("clibs.zig");
 
 pub fn Handle(comptime T: type) type {
     _ = T;

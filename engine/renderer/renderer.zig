@@ -1,14 +1,13 @@
 const std = @import("std");
 const math = @import("math");
-const sdl_util = @import("../sdl_util.zig");
+const sdl_util = @import("sdl_util.zig");
 const sampler_allocator = @import("allocators/sampler_allocator.zig");
 const rta = @import("allocators/render_target_allocator.zig");
 const ta = @import("allocators/texture_allocator.zig");
-const c = @import("../clibs.zig");
+pub const c = @import("clibs.zig");
 const types = @import("types.zig");
 const camera = @import("camera.zig");
 
-const Window = @import("../engine/window.zig").Window;
 const Allocator = std.mem.Allocator;
 
 const Texture = types.Texture;
@@ -35,8 +34,8 @@ const Camera2D = camera.Camera2D;
 const vk_format = types.vk_format;
 
 const shaders = struct {
-    const DEFAULT_TEXTURE_VS = @embedFile("../spirv/default_textures.vert.spv");
-    const DEFAULT_TEXTURE_FS = @embedFile("../spirv/default_fragment.frag.spv");
+    const DEFAULT_TEXTURE_VS = @embedFile("spirv/default_textures.vert.spv");
+    const DEFAULT_TEXTURE_FS = @embedFile("spirv/default_fragment.frag.spv");
 };
 
 const required_device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
@@ -54,7 +53,6 @@ pub const Renderer = struct {
     debug_utils: ?DebugUtilsMessengerExt,
     allocator: Allocator,
     vk_allocator: c.VmaAllocator,
-    window: *Window,
 
     surface: c.VkSurfaceKHR,
     physical_device: VkPhysicalDevice,
@@ -76,13 +74,13 @@ pub const Renderer = struct {
 
     current_render_state: usize = 0,
 
-    pub fn init(window: *Window, allocator: Allocator) !Renderer {
-        const instance = try create_vulkan_instance(window.window, allocator);
+    pub fn init(window: *c.SDL_Window, allocator: Allocator) !Renderer {
+        const instance = try create_vulkan_instance(window, allocator);
         errdefer c.vkDestroyInstance(instance, null);
 
         const debug_utils = DebugUtilsMessengerExt.init(instance);
 
-        const surface = create_vulkan_surface(window.window, instance);
+        const surface = create_vulkan_surface(window, instance);
         errdefer c.vkDestroySurfaceKHR(instance, surface, null);
 
         const physical_device = try select_physical_device(instance, allocator);
@@ -133,8 +131,6 @@ pub const Renderer = struct {
 
             .default_texture_pipeline_layout = pipeline_layout,
             .default_texture_pipeline = try create_default_texture_graphics_pipeline(device, pipeline_layout),
-
-            .window = window,
         };
 
         try inst.create_defaults();
@@ -1232,7 +1228,7 @@ const Swapchain = struct {
     acquire_fence: c.VkFence = null,
     image_count: u32 = 0,
 
-    fn init(this: *Swapchain, window: *Window, instance: c.VkInstance, physical_device: c.VkPhysicalDevice, device: c.VkDevice, surface: c.VkSurfaceKHR, queue: c.VkQueue, qfi: u32, allocator: Allocator) !void {
+    fn init(this: *Swapchain, window: *c.SDL_Window, instance: c.VkInstance, physical_device: c.VkPhysicalDevice, device: c.VkDevice, surface: c.VkSurfaceKHR, queue: c.VkQueue, qfi: u32, allocator: Allocator) !void {
         _ = instance;
         this.deinit(device, allocator);
         if (this.images.len > 0) {
@@ -1256,7 +1252,7 @@ const Swapchain = struct {
 
         var width_c: c_int = 0;
         var height_c: c_int = 0;
-        c.SDL_GetWindowSize(window.window, &width_c, &height_c);
+        c.SDL_GetWindowSize(window, &width_c, &height_c);
 
         var width: u32 = @intCast(width_c);
         var height: u32 = @intCast(height_c);

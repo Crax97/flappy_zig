@@ -1,7 +1,7 @@
 const std = @import("std");
-const sdl_util = @import("../sdl_util.zig");
 const core = @import("core");
-const renderer = @import("../renderer/main.zig");
+const renderer = @import("renderer");
+const sdl_util = renderer.sdl_util;
 
 const math = @import("math");
 

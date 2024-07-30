@@ -1,12 +1,10 @@
 const std = @import("std");
-const c = @import("clibs.zig");
 const ft = @import("freetype.zig");
 const ecs = @import("ecs");
 const ComponentBegin = ecs.ComponentBegin;
 const ComponentUpdate = ecs.ComponentUpdate;
 const ComponentDestroyed = ecs.ComponentDestroyed;
 const window = @import("engine/window.zig");
-const sdl_util = @import("sdl_util.zig");
 const engine = @import("engine/engine.zig");
 const wav_lib = @import("engine/audio/wav.zig");
 
@@ -21,7 +19,7 @@ const Engine = engine.Engine;
 const EntityID = ecs.EntityID;
 const ComponentHandle = ecs.ComponentHandle;
 
-const SDL = @import("clibs.zig");
+const SDL = @import("renderer").c;
 
 const World = ecs.World;
 
@@ -131,7 +129,7 @@ const Bird = struct {
             state.num_games += 1;
             try ctx.world.push_event(RestartEvent{ .games = state.num_games });
         }
-        if (engine.Input.is_key_just_down(c.SDL_SCANCODE_SPACE) and state.bird_alive) {
+        if (engine.Input.is_key_just_down(SDL.SDL_SCANCODE_SPACE) and state.bird_alive) {
             this.velocity.set_y(-5.0);
             Engine.instance().audio_system.play_sound_effect(this.flap_sound);
         }
