@@ -50,6 +50,7 @@ pub const Game = struct {
 };
 
 pub const Engine = struct {
+    var engine_instance_ptr: ?*Engine = null;
     window: window.Window,
     renderer: renderer.Renderer,
     font_manager: FontManager,
@@ -82,6 +83,10 @@ pub const Engine = struct {
         c.SDL_Quit();
     }
 
+    pub fn instance() *Engine {
+        return engine_instance_ptr.?;
+    }
+
     pub fn get_world(this: *Engine) *World {
         return &this.world;
     }
@@ -89,7 +94,7 @@ pub const Engine = struct {
     pub fn run_loop(this: *Engine, game: Game) !void {
         try game.init(game.target, this);
 
-        this.world.set_engine(this);
+        engine_instance_ptr = this;
 
         try this.world.begin();
         while (this.running) {

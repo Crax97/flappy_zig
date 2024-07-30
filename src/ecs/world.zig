@@ -19,7 +19,6 @@ const EventQueue = events.EventQueue;
 
 const ErasedArena = gen_arena.ErasedArena;
 const Allocator = std.mem.Allocator;
-const Engine = @import("../engine/engine.zig").Engine;
 
 const type_id = util.type_id;
 
@@ -109,7 +108,6 @@ pub const World = struct {
     new_entities: NewEntities,
     resources: Resources,
     event_queue: EventQueue,
-    engine_inst: ?*Engine,
 
     pub fn init(allocator: Allocator) Allocator.Error!World {
         return .{
@@ -117,7 +115,6 @@ pub const World = struct {
             .allocator = allocator,
             .entities = try Entities.init(allocator),
             .new_entities = NewEntities.init(allocator),
-            .engine_inst = null,
             .resources = Resources.init(allocator),
             .event_queue = EventQueue.init(allocator),
         };
@@ -147,14 +144,6 @@ pub const World = struct {
         this.resources.deinit();
         this.new_entities.deinit();
         this.event_queue.deinit();
-    }
-
-    pub fn set_engine(this: *World, engine_inst: *Engine) void {
-        this.engine_inst = engine_inst;
-    }
-
-    pub fn engine(this: *World) *Engine {
-        return this.engine_inst.?;
     }
 
     pub fn new_entity(this: *World) Allocator.Error!SpawnEntity {

@@ -104,18 +104,21 @@ const Bird = struct {
     bird_texture_down: TextureInfo = undefined,
     bird_texture_mid: TextureInfo = undefined,
     bird_texture_up: TextureInfo = undefined,
+    fg: TextureInfo = undefined,
     velocity: Vec2 = Vec2.ZERO,
     pos: Vec2 = Vec2.ZERO,
     rot: f32 = 0.0,
 
     pub fn begin(this: *Bird, ctx: ComponentBegin) anyerror!void {
-        this.bird_texture_down = try load_texture_from_file(ctx.world.engine(), "./assets/sprites/bluebird-downflap.png");
-        this.bird_texture_mid = try load_texture_from_file(ctx.world.engine(), "./assets/sprites/bluebird-midflap.png");
-        this.bird_texture_up = try load_texture_from_file(ctx.world.engine(), "./assets/sprites/bluebird-upflap.png");
+        _ = ctx;
+        this.bird_texture_down = try load_texture_from_file(Engine.instance(), "./assets/sprites/bluebird-downflap.png");
+        this.bird_texture_mid = try load_texture_from_file(Engine.instance(), "./assets/sprites/bluebird-midflap.png");
+        this.bird_texture_up = try load_texture_from_file(Engine.instance(), "./assets/sprites/bluebird-upflap.png");
+        this.fg = try load_texture_from_file(Engine.instance(), "./assets/sprites/base.png");
     }
 
     pub fn update(this: *Bird, ctx: ComponentUpdate) anyerror!void {
-        var renderer = &ctx.world.engine().renderer;
+        var renderer = &Engine.instance().renderer;
         const state = ctx.world.get_resource_checked(GameState);
 
         if (engine.Input.is_key_just_down(SDL.SDL_SCANCODE_R)) {
@@ -133,8 +136,8 @@ const Bird = struct {
         this.velocity.set_y(this.velocity.y() + @as(f32, @floatCast(ctx.delta_time)) * GRAVITY);
         this.pos = this.pos.add(this.velocity);
 
-        if (this.pos.y() < -256.0 or this.pos.y() > 256.0) {
-            this.pos.set_y(std.math.clamp(this.pos.y(), -256.0, 256.0));
+        if (this.pos.y() < -256.0 or this.pos.y() > 256.0 - this.fg.extents.y()) {
+            this.pos.set_y(std.math.clamp(this.pos.y(), -256.0, 256.0 - this.fg.extents.y()));
             state.bird_alive = false;
         }
 
@@ -151,6 +154,18 @@ const Bird = struct {
                 .extent = texture.extents,
             },
             .z_index = -5,
+        });
+
+        try renderer.draw_texture(engine.renderer.TextureDrawInfo{
+            .texture = this.fg.handle,
+            .position = vec2(0.0, 256.0 - this.fg.extents.y() * 0.5),
+            .rotation = 0.0,
+            .scale = vec2(1.0, 1.0),
+            .region = Rect2{
+                .offset = Vec2.ZERO,
+                .extent = this.fg.extents,
+            },
+            .z_index = -7,
         });
     }
 
@@ -175,10 +190,12 @@ const Bird = struct {
         this.rot = std.math.lerp(this.rot, target_rot, lerp_speed * @as(f32, @floatCast(dt)));
     }
 
-    pub fn destroyed(self: *Bird, ctx: ComponentDestroyed) anyerror!void {
-        ctx.world.engine().renderer.free_texture(self.bird_texture_down.handle);
-        ctx.world.engine().renderer.free_texture(self.bird_texture_up.handle);
-        ctx.world.engine().renderer.free_texture(self.bird_texture_mid.handle);
+    pub fn destroyed(this: *Bird, ctx: ComponentDestroyed) anyerror!void {
+        _ = ctx;
+        Engine.instance().renderer.free_texture(this.bird_texture_down.handle);
+        Engine.instance().renderer.free_texture(this.bird_texture_up.handle);
+        Engine.instance().renderer.free_texture(this.bird_texture_mid.handle);
+        Engine.instance().renderer.free_texture(this.fg.handle);
     }
 };
 
@@ -190,7 +207,8 @@ const PipeManager = struct {
     const PIPE_GAP: f32 = 150.0;
     const PIPE_SPEED: f32 = 200.0;
     const PIPE_DIST: f32 = 300.0;
-    const PIPE_MAX_HEIGHT: f32 = 120.0;
+    const PIPE_MAX_HEIGHT: f32 = 20.0;
+    const PIPE_MIN_HEIGHT: f32 = -150.0;
     pipes: [5]Pipe = .{
         .{},
         .{},
@@ -201,6 +219,7 @@ const PipeManager = struct {
     player: EntityID,
     bird: ComponentHandle(Bird) = undefined,
     pipe_texture: TextureInfo = undefined,
+    last_reset_pipe: usize = 4,
 
     fn new(player: EntityID) PipeManager {
         return .{
@@ -211,7 +230,8 @@ const PipeManager = struct {
     pub fn begin(this: *PipeManager, ctx: ComponentBegin) anyerror!void {
         try this.init();
         this.bird = ctx.world.get_component(Bird, this.player).?;
-        this.pipe_texture = try load_texture_from_file(ctx.world.engine(), "assets/sprites/pipe-green.png");
+        this.pipe_texture = try load_texture_from_file(Engine.instance(), "assets/sprites/pipe-green.png");
+
         try ctx.world.add_event_dispatcher(PipeManager, ctx.component_handle(PipeManager), on_restart_event);
     }
 
@@ -222,13 +242,15 @@ const PipeManager = struct {
 
     fn init(this: *PipeManager) !void {
         for (&this.pipes, 0..) |*pipe, i| {
-            try reset_pipe(pipe, @intCast(i));
+            const x_off = 256.0 + @as(f32, @floatFromInt(i)) * PIPE_DIST;
+            try reset_pipe(pipe, x_off);
         }
+        this.last_reset_pipe = this.pipes.len - 1;
     }
 
-    fn reset_pipe(pipe: *Pipe, index_mult: u32) !void {
-        pipe.pos.set_x(700.0 + @as(f32, @floatFromInt(index_mult)) * PIPE_DIST);
-        const y = PIPE_MAX_HEIGHT * rand_gen.float(f32);
+    fn reset_pipe(pipe: *Pipe, x_off: f32) !void {
+        pipe.pos.set_x(x_off);
+        const y = PIPE_MIN_HEIGHT + (PIPE_MAX_HEIGHT - PIPE_MIN_HEIGHT) * rand_gen.float(f32);
         pipe.pos.set_y(y);
         pipe.hit = false;
     }
@@ -237,14 +259,17 @@ const PipeManager = struct {
         const bird = this.bird.get();
         const player_pos = bird.pos;
         const delta_secs = ctx.delta_time;
-        var engine_inst = ctx.world.engine();
+        var engine_inst = Engine.instance();
         const state = ctx.world.get_resource_checked(GameState);
 
-        for (&this.pipes) |*pipe| {
+        var renderer = &engine_inst.renderer;
+        for (&this.pipes, 0..) |*pipe, i| {
             if (state.bird_alive) {
                 pipe.pos.set_x(pipe.pos.x() - PIPE_SPEED * @as(f32, @floatCast(delta_secs)));
                 if (pipe.pos.x() <= -(288.0 + 2.0 * this.pipe_texture.extents.x())) {
-                    try reset_pipe(pipe, 0);
+                    const furthest = this.pipes[this.last_reset_pipe].pos.x();
+                    try reset_pipe(pipe, furthest + PIPE_DIST);
+                    this.last_reset_pipe = i;
                 }
             }
 
@@ -289,8 +314,6 @@ const PipeManager = struct {
                 pipe.hit = true;
             }
 
-            var renderer = &engine_inst.renderer;
-
             try renderer.draw_texture(engine.renderer.TextureDrawInfo{
                 .texture = this.pipe_texture.handle,
                 .position = rect_1.offset,
@@ -317,8 +340,10 @@ const PipeManager = struct {
         }
     }
 
-    pub fn destroyed(this: *PipeManager, ctx: ComponentDestroyed) anyerror!void {
-        ctx.world.engine().renderer.free_texture(this.pipe_texture.handle);
+    fn destroyed(this: *PipeManager, ctx: ComponentDestroyed, foo: u32) anyerror!void {
+        _ = foo;
+        _ = ctx;
+        Engine.instance().renderer.free_texture(this.pipe_texture.handle);
     }
 };
 
@@ -335,11 +360,8 @@ fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!Textu
     const data_p = SDL.stbi_load(path.ptr, &width, &height, &channels, 4);
     std.debug.assert(data_p != null);
     defer SDL.stbi_image_free(data_p);
-    const data_size = width * height * channels;
-    const format = switch (channels) {
-        4 => engine.renderer.TextureFormat.rgba_8,
-        else => unreachable,
-    };
+    const data_size = width * height * 4;
+    const format = engine.renderer.TextureFormat.rgba_8;
     const data = data_p[0..@intCast(data_size)];
 
     const handle = try inst.renderer.alloc_texture(engine.Texture.CreateInfo{
