@@ -47,7 +47,7 @@ fn build_renderer_module(b: *std.Build, target: std.Build.ResolvedTarget, optimi
 
     // STB
     renderer.addIncludePath(.{ .cwd_relative = "thirdparty/stb" });
-    renderer.addCSourceFile(.{ .file = b.path("src/stb_image.cpp") });
+    renderer.addCSourceFile(.{ .file = .{ .cwd_relative = sdk_path("/cpp/stb_image.cpp") } });
 
     // SDL
     renderer.addIncludePath(.{ .cwd_relative = "thirdparty/sdl/include" });
@@ -69,7 +69,7 @@ fn build_renderer_module(b: *std.Build, target: std.Build.ResolvedTarget, optimi
 
     // VMA
     renderer.addIncludePath(.{ .cwd_relative = "thirdparty/vma/include" });
-    renderer.addCSourceFile(.{ .file = b.path("src/vma.cpp") });
+    renderer.addCSourceFile(.{ .file = .{ .cwd_relative = sdk_path("/cpp/vma.cpp") } });
 
     // Freetype
     const b_freetype = b.dependency("freetype", .{});
