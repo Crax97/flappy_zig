@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const engine_sdk = @import("engine/build.zig");
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -16,7 +15,7 @@ pub fn build(b: *std.Build) !void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
-    const sdk = engine_sdk.setup(b, target, optimize);
+    const engine = b.dependency("engine", .{});
 
     const exe = b.addExecutable(.{
         .name = "gamefun",
@@ -32,8 +31,12 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .link_libc = true,
     });
-    sdk.add_to_target(exe);
-    sdk.add_to_target(check);
+    exe.root_module.addImport("engine", engine.module("engine"));
+    exe.root_module.addImport("core", engine.module("core"));
+    exe.root_module.addImport("math", engine.module("math"));
+    exe.root_module.addImport("ecs", engine.module("ecs"));
+    exe.root_module.addImport("renderer", engine.module("renderer"));
+    // sdk.add_to_target(check);
     try setup_compile(exe, b, target);
     try setup_compile(check, b, target);
 
@@ -89,12 +92,8 @@ pub fn build(b: *std.Build) !void {
 }
 
 fn setup_compile(exe: *std.Build.Step.Compile, b: *std.Build, target: std.Build.ResolvedTarget) !void {
-
-    // Freetype
-    const b_freetype = b.dependency("freetype", .{});
-    exe.linkLibrary(b_freetype.artifact("freetype"));
-    exe.addIncludePath(.{ .cwd_relative = "thirdparty/zig-freetype/include" });
-
+    _ = b;
+    _ = exe;
     _ = target;
 }
 

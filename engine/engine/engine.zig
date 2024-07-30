@@ -6,6 +6,7 @@ const ecs = @import("ecs");
 const fonts = @import("fonts.zig");
 const audio_system = @import("audio/audio_system.zig");
 pub const renderer = @import("renderer");
+pub const wav_lib = @import("audio/wav.zig");
 const sdl_util = renderer.sdl_util;
 const c = renderer.c;
 

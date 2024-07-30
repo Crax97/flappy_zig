@@ -23,7 +23,7 @@ fn build_math_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: 
 }
 
 fn build_ecs_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, core_module: *std.Build.Module) *std.Build.Module {
-    const ecs = b.addModule("math", .{
+    const ecs = b.addModule("ecs", .{
         .root_source_file = .{ .cwd_relative = sdk_path("/ecs/main.zig") },
         .target = target,
         .optimize = optimize,
@@ -35,7 +35,7 @@ fn build_ecs_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
 }
 
 fn build_renderer_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, core_module: *std.Build.Module, math_module: *std.Build.Module) *std.Build.Module {
-    const renderer = b.addModule("math", .{
+    const renderer = b.addModule("renderer", .{
         .root_source_file = .{ .cwd_relative = sdk_path("/renderer/main.zig") },
         .target = target,
         .optimize = optimize,
@@ -71,11 +71,6 @@ fn build_renderer_module(b: *std.Build, target: std.Build.ResolvedTarget, optimi
     renderer.addIncludePath(.{ .cwd_relative = "thirdparty/vma/include" });
     renderer.addCSourceFile(.{ .file = .{ .cwd_relative = sdk_path("/cpp/vma.cpp") } });
 
-    // Freetype
-    const b_freetype = b.dependency("freetype", .{});
-    renderer.linkLibrary(b_freetype.artifact("freetype"));
-    renderer.addIncludePath(.{ .cwd_relative = "thirdparty/zig-freetype/include" });
-
     // OpenAL
     renderer.addIncludePath(.{ .cwd_relative = "thirdparty/openal/include/" });
     if (target.result.os.tag == .windows) {
@@ -94,17 +89,39 @@ fn build_renderer_module(b: *std.Build, target: std.Build.ResolvedTarget, optimi
     return renderer;
 }
 
+fn build_engine_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, core_module: *std.Build.Module, math_module: *std.Build.Module, ecs_module: *std.Build.Module, renderer_module: *std.Build.Module) *std.Build.Module {
+    const engine = b.addModule("engine", .{
+        .root_source_file = .{ .cwd_relative = sdk_path("/engine/engine.zig") },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Freetype
+    const b_freetype = b.dependency("freetype", .{});
+    engine.linkLibrary(b_freetype.artifact("freetype"));
+    engine.addIncludePath(.{ .cwd_relative = "thirdparty/zig-freetype/include" });
+
+    engine.addImport("core", core_module);
+    engine.addImport("math", math_module);
+    engine.addImport("ecs", ecs_module);
+    engine.addImport("renderer", renderer_module);
+
+    return engine;
+}
+
 pub const EngineSdk = struct {
     core_module: *std.Build.Module,
     math_module: *std.Build.Module,
     ecs_module: *std.Build.Module,
     renderer_module: *std.Build.Module,
+    engine_module: *std.Build.Module,
 
     pub fn add_to_target(this: *const EngineSdk, compile: *std.Build.Step.Compile) void {
         compile.root_module.addImport("core", this.core_module);
         compile.root_module.addImport("math", this.math_module);
         compile.root_module.addImport("ecs", this.ecs_module);
         compile.root_module.addImport("renderer", this.renderer_module);
+        compile.root_module.addImport("engine", this.engine_module);
     }
 };
 
@@ -113,12 +130,14 @@ pub fn setup(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
     const math_module = build_math_module(b, target, optimize);
     const ecs_module = build_ecs_module(b, target, optimize, core_module);
     const renderer_module = build_renderer_module(b, target, optimize, core_module, math_module);
+    const engine_module = build_engine_module(b, target, optimize, core_module, math_module, ecs_module, renderer_module);
 
     return .{
         .core_module = core_module,
         .math_module = math_module,
         .ecs_module = ecs_module,
         .renderer_module = renderer_module,
+        .engine_module = engine_module,
     };
 }
 

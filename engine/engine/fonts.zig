@@ -14,7 +14,7 @@ const Vec3 = math.Vec3;
 const Vec4 = math.Vec4;
 const Rect2 = math.Rect2;
 
-const ft = @import("../freetype.zig");
+const ft = @import("freetype.zig");
 
 pub const FontManagerError = error{} || Allocator.Error;
 

@@ -1,12 +1,11 @@
 const std = @import("std");
-const ft = @import("freetype.zig");
 const ecs = @import("ecs");
 const ComponentBegin = ecs.ComponentBegin;
 const ComponentUpdate = ecs.ComponentUpdate;
 const ComponentDestroyed = ecs.ComponentDestroyed;
-const window = @import("engine/window.zig");
-const engine = @import("engine/engine.zig");
-const wav_lib = @import("engine/audio/wav.zig");
+const engine = @import("engine");
+const window = engine.window;
+const wav_lib = @import("engine").wav_lib;
 
 const math = @import("math");
 const Vec2 = math.Vec2;
@@ -401,12 +400,6 @@ fn load_texture_from_file(inst: *engine.Engine, path: []const u8) anyerror!Textu
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-
-    var lib: ft.FT_Library = undefined;
-    const err = ft.FT_Init_FreeType(&lib);
-    if (err != ft.FT_Err_Ok) {
-        std.debug.panic("Freetype err", .{});
-    }
 
     var rand = std.rand.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
