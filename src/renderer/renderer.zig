@@ -1168,9 +1168,14 @@ const SwapchainImage = struct {
 
 pub fn vk_check(expr: c.VkResult, comptime errmsg: []const u8) void {
     if (expr != c.VK_SUCCESS) {
-        std.log.err("Vulkan error 0x{x}", .{expr});
+        std.log.err("Vulkan error '{s}'", .{vk_err_msg(expr)});
         vulkan_failure(errmsg);
     }
+}
+
+fn vk_err_msg(expr: c.VkResult) []const u8 {
+    const msg = c.string_VkResult(expr);
+    return std.mem.span(msg);
 }
 
 fn unopt(comptime T: type) type {
