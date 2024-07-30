@@ -6,6 +6,7 @@ const window = @import("window.zig");
 const time = @import("time.zig");
 const ecs = @import("../ecs/ecs.zig");
 const fonts = @import("fonts.zig");
+const audio_system = @import("audio/audio_system.zig");
 pub const renderer = @import("../renderer/main.zig");
 
 pub const World = ecs.World;
@@ -66,6 +67,7 @@ pub const Engine = struct {
         const renderer_instance = try renderer.Renderer.init(&win, allocator);
 
         try input.init(allocator);
+        audio_system.init();
 
         return .{
             .window = win,
@@ -77,6 +79,7 @@ pub const Engine = struct {
 
     pub fn deinit(this: *Engine) void {
         input.deinit();
+        audio_system.deinit();
         this.font_manager.deinit(&this.renderer);
         this.renderer.deinit();
         this.window.deinit();

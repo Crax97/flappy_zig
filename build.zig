@@ -122,6 +122,18 @@ fn setup_compile(exe: *std.Build.Step.Compile, b: *std.Build, target: std.Build.
     // Freetype
     const b_freetype = b.dependency("freetype", .{});
     exe.linkLibrary(b_freetype.artifact("freetype"));
+
+    // OpenAL
+    exe.addIncludePath(b.path("thirdparty/openal/include/"));
+    if (target.result.os.tag == .windows) {
+        // For now only x64 is supported
+        exe.addLibraryPath(b.path("thirdparty/openal/libs/Win64/"));
+        b.installBinFile("thirdparty/openal/bin/Win64/soft_oal.dll", "OpenAL32.dll");
+
+        exe.linkSystemLibrary("openal32");
+    } else if (target.result.os.tag == .linux) {
+        exe.linkSystemLibrary("openal");
+    }
 }
 
 fn build_shaders(b: *std.Build, exe: *std.Build.Step.Compile) !void {
