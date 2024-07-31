@@ -34,8 +34,8 @@ const Camera2D = camera.Camera2D;
 const vk_format = types.vk_format;
 
 const shaders = struct {
-    const DEFAULT_TEXTURE_VS = @embedFile("spirv/default_textures.vert.spv");
-    const DEFAULT_TEXTURE_FS = @embedFile("spirv/default_fragment.frag.spv");
+    const DEFAULT_TEXTURE_VS = @embedFile("renderer/spirv/default_textures.vert.spv");
+    const DEFAULT_TEXTURE_FS = @embedFile("renderer/spirv/default_fragment.frag.spv");
 };
 
 const required_device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};

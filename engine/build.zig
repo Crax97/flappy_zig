@@ -1,14 +1,14 @@
 const std = @import("std");
 
-fn sdk_path(comptime path: []const u8) []const u8 {
-    const src = @src();
-    const source = comptime std.fs.path.dirname(src.file) orelse ".";
-    return source ++ path;
-}
+// fn sdk_path(comptime path: []const u8) []const u8 {
+//     const src = @src();
+//     const source = comptime std.fs.path.dirname(src.file) orelse ".";
+//     return source ++ path;
+// }
 
 fn build_core_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
     return b.addModule("core", .{
-        .root_source_file = .{ .cwd_relative = sdk_path("/core/main.zig") },
+        .root_source_file = b.path("core/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -16,7 +16,7 @@ fn build_core_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: 
 
 fn build_math_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
     return b.addModule("math", .{
-        .root_source_file = .{ .cwd_relative = sdk_path("/math/main.zig") },
+        .root_source_file = b.path("math/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -24,7 +24,7 @@ fn build_math_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: 
 
 fn build_ecs_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, core_module: *std.Build.Module) *std.Build.Module {
     const ecs = b.addModule("ecs", .{
-        .root_source_file = .{ .cwd_relative = sdk_path("/ecs/main.zig") },
+        .root_source_file = b.path("ecs/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -36,21 +36,21 @@ fn build_ecs_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
 
 fn build_renderer_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, core_module: *std.Build.Module, math_module: *std.Build.Module) *std.Build.Module {
     const renderer = b.addModule("renderer", .{
-        .root_source_file = .{ .cwd_relative = sdk_path("/renderer/main.zig") },
+        .root_source_file = b.path("renderer/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
     });
-    renderer.link_libc = true;
-    renderer.link_libcpp = true;
 
     const env_map = std.process.getEnvMap(b.allocator) catch @panic("OOM");
 
     // STB
-    renderer.addIncludePath(.{ .cwd_relative = "thirdparty/stb" });
-    renderer.addCSourceFile(.{ .file = .{ .cwd_relative = sdk_path("/cpp/stb_image.cpp") } });
+    renderer.addIncludePath(b.path("thirdparty/stb"));
+    renderer.addCSourceFile(.{ .file = b.path("cpp/stb_image.cpp") });
 
     // SDL
-    renderer.addIncludePath(.{ .cwd_relative = "thirdparty/sdl/include" });
+    renderer.addIncludePath(b.path("thirdparty/sdl/include"));
     renderer.linkSystemLibrary("SDL2", .{});
 
     if (target.result.os.tag == .windows) {
@@ -68,20 +68,8 @@ fn build_renderer_module(b: *std.Build, target: std.Build.ResolvedTarget, optimi
     }
 
     // VMA
-    renderer.addIncludePath(.{ .cwd_relative = "thirdparty/vma/include" });
-    renderer.addCSourceFile(.{ .file = .{ .cwd_relative = sdk_path("/cpp/vma.cpp") } });
-
-    // OpenAL
-    renderer.addIncludePath(.{ .cwd_relative = "thirdparty/openal/include/" });
-    if (target.result.os.tag == .windows) {
-        // For now only x64 is supported
-        renderer.addLibraryPath(b.path("thirdparty/openal/libs/Win64/"));
-        b.installBinFile("thirdparty/openal/bin/Win64/soft_oal.dll", "OpenAL32.dll");
-
-        renderer.linkSystemLibrary("openal32", .{});
-    } else if (target.result.os.tag == .linux) {
-        renderer.linkSystemLibrary("openal", .{});
-    }
+    renderer.addIncludePath(b.path("thirdparty/vma/include"));
+    renderer.addCSourceFile(.{ .file = b.path("cpp/vma.cpp") });
 
     renderer.addImport("core", core_module);
     renderer.addImport("math", math_module);
@@ -91,9 +79,10 @@ fn build_renderer_module(b: *std.Build, target: std.Build.ResolvedTarget, optimi
 
 fn build_engine_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, core_module: *std.Build.Module, math_module: *std.Build.Module, ecs_module: *std.Build.Module, renderer_module: *std.Build.Module) *std.Build.Module {
     const engine = b.addModule("engine", .{
-        .root_source_file = .{ .cwd_relative = sdk_path("/engine/engine.zig") },
+        .root_source_file = b.path("engine/engine.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
     // Freetype
@@ -105,6 +94,18 @@ fn build_engine_module(b: *std.Build, target: std.Build.ResolvedTarget, optimize
     engine.addImport("math", math_module);
     engine.addImport("ecs", ecs_module);
     engine.addImport("renderer", renderer_module);
+
+    // OpenAL
+    engine.addIncludePath(b.path("thirdparty/openal/include/"));
+    if (target.result.os.tag == .windows) {
+        // For now only x64 is supported
+        engine.addLibraryPath(b.path("thirdparty/openal/libs/Win64/"));
+        b.installBinFile("thirdparty/openal/bin/Win64/soft_oal.dll", "OpenAL32.dll");
+
+        engine.linkSystemLibrary("openal32", .{});
+    } else if (target.result.os.tag == .linux) {
+        engine.linkSystemLibrary("openal", .{});
+    }
 
     return engine;
 }
@@ -144,27 +145,87 @@ pub fn setup(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.buil
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
     const sdk = setup(b, target, optimize);
+
+    compile_shaders(b, sdk.renderer_module);
+
     const test_step = b.step("test", "Run unit tests");
 
-    add_test(b, &sdk, test_step, "core/main.zig", target, optimize);
-    add_test(b, &sdk, test_step, "math/main.zig", target, optimize);
-    add_test(b, &sdk, test_step, "ecs/main.zig", target, optimize);
-    add_test(b, &sdk, test_step, "renderer/main.zig", target, optimize);
+    add_tests(
+        b,
+        &sdk,
+        test_step,
+        target,
+        optimize,
+        &[_][]const u8{
+            "core/main.zig",
+            "math/main.zig",
+            "ecs/main.zig",
+            "renderer/main.zig",
+            "engine/engine.zig",
+        },
+    );
 }
 
-fn add_test(b: *std.Build, sdk: *const EngineSdk, step: *std.Build.Step, comptime source: []const u8, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
-    const core_unit_tests = b.addTest(.{
-        .root_source_file = b.path(source),
-        .target = target,
-        .optimize = optimize,
-    });
+fn add_tests(b: *std.Build, sdk: *const EngineSdk, step: *std.Build.Step, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, comptime sources: []const []const u8) void {
+    for (sources) |source| {
+        const core_unit_tests = b.addTest(.{
+            .root_source_file = b.path(source),
+            .target = target,
+            .optimize = optimize,
+        });
 
-    sdk.add_to_target(core_unit_tests);
+        sdk.add_to_target(core_unit_tests);
 
-    core_unit_tests.linkLibC();
+        core_unit_tests.linkLibC();
 
-    const run_unit_tests = b.addRunArtifact(core_unit_tests);
+        const run_unit_tests = b.addRunArtifact(core_unit_tests);
 
-    step.dependOn(&run_unit_tests.step);
+        step.dependOn(&run_unit_tests.step);
+    }
+}
+
+fn compile_shaders(
+    b: *std.Build,
+    module: *std.Build.Module,
+) void {
+    const base_rel_path = "renderer/shaders";
+    const out_dir = "renderer/spirv";
+    const iterator = b.build_root.handle.openDir(base_rel_path, .{ .iterate = true }) catch @panic("OOM");
+    var it = iterator.iterate();
+
+    while (it.next() catch @panic("WalkDir")) |entry| {
+        if (entry.kind == .file) {
+            const ext = std.fs.path.extension(entry.name);
+            const full_path = std.fs.path.join(b.allocator, &.{ base_rel_path, entry.name }) catch @panic("OOM");
+            if (is_shader_ext_valid(ext)) {
+                add_shader(b, module, out_dir, full_path);
+            }
+        }
+    }
+}
+
+fn is_shader_ext_valid(ext: []const u8) bool {
+    const valid_exts = [3][]const u8{ ".vert", ".frag", ".comp" };
+
+    for (valid_exts) |ve| {
+        if (std.mem.eql(u8, ve, ext)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn add_shader(b: *std.Build, module: *std.Build.Module, out_dir: []const u8, full_path: []const u8) void {
+    const name = std.fs.path.basename(full_path);
+    const outpath = std.fmt.allocPrint(b.allocator, "{s}/{s}.spv", .{ out_dir, name }) catch @panic("OOM");
+
+    std.debug.print("Compiling shader '{s}' to '{s}'\n", .{ full_path, outpath });
+    const shader_compilation = b.addSystemCommand(&.{"glslangValidator"});
+    shader_compilation.addArg("-V");
+    shader_compilation.addArg("-o");
+    const output = shader_compilation.addOutputFileArg(outpath);
+    shader_compilation.addFileArg(b.path(full_path));
+    module.addAnonymousImport(outpath, .{ .root_source_file = output });
 }

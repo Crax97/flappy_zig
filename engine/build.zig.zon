@@ -24,7 +24,7 @@
     // internet connectivity.
     .dependencies = .{
         .freetype = .{
-            .path = "../thirdparty/zig-freetype",
+            .path = "thirdparty/zig-freetype",
         },
 
         // See `zig fetch --save <url>` for a command-line interface for adding dependencies.

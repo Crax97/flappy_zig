@@ -1,0 +1,50 @@
+name: Build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v1
+      with:
+        version: master
+
+    - name: Check formatting
+      run: zig fmt --check .
+
+    - name: Fetch latest Vulkan SDK
+      run: |
+        wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+        sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+        sudo apt update
+        sudo apt install shaderc libglfw3 libglfw3-dev
+
+    - name: Fetch latest vk.xml
+      run: wget https://raw.githubusercontent.com/KhronosGroup/Vulkan-Docs/main/xml/vk.xml
+
+    - name: Test and install with latest zig & latest vk.xml
+      run: zig build test install -Dregistry=$(pwd)/vk.xml
+
+    - name: Build example with latest zig & vk.xml from dependency
+      run: zig build --build-file $(pwd)/examples/build.zig
+
+    - name: Build example with latest zig & latest vk.xml
+      run: zig build --build-file $(pwd)/examples/build.zig -Doverride-registry=$(pwd)/vk.xml
+
+    - name: Archive vk.zig
+      uses: actions/upload-artifact@v4
+      with:
+        name: vk.zig
+        path: zig-out/src/vk.zig
+        if-no-files-found: error
