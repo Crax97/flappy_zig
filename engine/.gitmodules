@@ -1,6 +1,0 @@
-[submodule "thirdparty/vma"]
-	path = thirdparty/vma
-	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
-[submodule "thirdparty/zig-freetype"]
-	path = thirdparty/zig-freetype
-	url = https://github.com/hexops/freetype

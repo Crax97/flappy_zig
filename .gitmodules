@@ -1,0 +1,4 @@
+[submodule "zgear"]
+	path = zgear
+	url = https://github.com/Crax97/zgear.git
+	branch = 0.0.1

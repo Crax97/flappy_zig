@@ -15,17 +15,17 @@ pub fn build(b: *std.Build) !void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
-    const engine = b.dependency("engine", .{});
+    const engine = b.dependency("zgear", .{});
 
     const exe = b.addExecutable(.{
-        .name = "gamefun",
+        .name = "flappy_zig",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
     const check = b.addExecutable(.{
-        .name = "gamefun",
+        .name = "flappy_zig",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -36,6 +36,12 @@ pub fn build(b: *std.Build) !void {
     exe.root_module.addImport("math", engine.module("math"));
     exe.root_module.addImport("ecs", engine.module("ecs"));
     exe.root_module.addImport("renderer", engine.module("renderer"));
+
+    check.root_module.addImport("engine", engine.module("engine"));
+    check.root_module.addImport("core", engine.module("core"));
+    check.root_module.addImport("math", engine.module("math"));
+    check.root_module.addImport("ecs", engine.module("ecs"));
+    check.root_module.addImport("renderer", engine.module("renderer"));
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
